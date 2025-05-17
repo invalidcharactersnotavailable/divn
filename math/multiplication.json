@@ -1,0 +1,402 @@
+[
+  {
+    "query": "25*29",
+    "completion": "25*29=725"
+  },
+  {
+    "query": "3*61",
+    "completion": "3*61=183"
+  },
+  {
+    "query": "44*51",
+    "completion": "44*51=2244"
+  },
+  {
+    "query": "88*18",
+    "completion": "88*18=1584"
+  },
+  {
+    "query": "35*75",
+    "completion": "35*75=2625"
+  },
+  {
+    "query": "93*48",
+    "completion": "93*48=4464"
+  },
+  {
+    "query": "62*61",
+    "completion": "62*61=3782"
+  },
+  {
+    "query": "9*96",
+    "completion": "9*96=864"
+  },
+  {
+    "query": "41*37",
+    "completion": "41*37=1517"
+  },
+  {
+    "query": "17*93",
+    "completion": "17*93=1581"
+  },
+  {
+    "query": "91*54",
+    "completion": "91*54=4914"
+  },
+  {
+    "query": "90*93",
+    "completion": "90*93=8370"
+  },
+  {
+    "query": "2*83",
+    "completion": "2*83=166"
+  },
+  {
+    "query": "30*40",
+    "completion": "30*40=1200"
+  },
+  {
+    "query": "46*71",
+    "completion": "46*71=3266"
+  },
+  {
+    "query": "10*87",
+    "completion": "10*87=870"
+  },
+  {
+    "query": "49*42",
+    "completion": "49*42=2058"
+  },
+  {
+    "query": "96*72",
+    "completion": "96*72=6912"
+  },
+  {
+    "query": "16*61",
+    "completion": "16*61=976"
+  },
+  {
+    "query": "3*12",
+    "completion": "3*12=36"
+  },
+  {
+    "query": "49*55",
+    "completion": "49*55=2695"
+  },
+  {
+    "query": "1*44",
+    "completion": "1*44=44"
+  },
+  {
+    "query": "65*72",
+    "completion": "65*72=4680"
+  },
+  {
+    "query": "37*41",
+    "completion": "37*41=1517"
+  },
+  {
+    "query": "81*85",
+    "completion": "81*85=6885"
+  },
+  {
+    "query": "93*18",
+    "completion": "93*18=1674"
+  },
+  {
+    "query": "97*93",
+    "completion": "97*93=9021"
+  },
+  {
+    "query": "53*57",
+    "completion": "53*57=3021"
+  },
+  {
+    "query": "48*96",
+    "completion": "48*96=4608"
+  },
+  {
+    "query": "54*8",
+    "completion": "54*8=432"
+  },
+  {
+    "query": "82*68",
+    "completion": "82*68=5576"
+  },
+  {
+    "query": "65*90",
+    "completion": "65*90=5850"
+  },
+  {
+    "query": "52*82",
+    "completion": "52*82=4264"
+  },
+  {
+    "query": "10*92",
+    "completion": "10*92=920"
+  },
+  {
+    "query": "70*77",
+    "completion": "70*77=5390"
+  },
+  {
+    "query": "8*91",
+    "completion": "8*91=728"
+  },
+  {
+    "query": "17*8",
+    "completion": "17*8=136"
+  },
+  {
+    "query": "89*73",
+    "completion": "89*73=6497"
+  },
+  {
+    "query": "20*73",
+    "completion": "20*73=1460"
+  },
+  {
+    "query": "26*48",
+    "completion": "26*48=1248"
+  },
+  {
+    "query": "4*54",
+    "completion": "4*54=216"
+  },
+  {
+    "query": "95*63",
+    "completion": "95*63=5985"
+  },
+  {
+    "query": "13*17",
+    "completion": "13*17=221"
+  },
+  {
+    "query": "27*72",
+    "completion": "27*72=1944"
+  },
+  {
+    "query": "82*79",
+    "completion": "82*79=6478"
+  },
+  {
+    "query": "57*57",
+    "completion": "57*57=3249"
+  },
+  {
+    "query": "85*83",
+    "completion": "85*83=7055"
+  },
+  {
+    "query": "80*29",
+    "completion": "80*29=2320"
+  },
+  {
+    "query": "47*42",
+    "completion": "47*42=1974"
+  },
+  {
+    "query": "69*62",
+    "completion": "69*62=4278"
+  },
+  {
+    "query": "79*16",
+    "completion": "79*16=1264"
+  },
+  {
+    "query": "34*38",
+    "completion": "34*38=1292"
+  },
+  {
+    "query": "37*73",
+    "completion": "37*73=2701"
+  },
+  {
+    "query": "73*88",
+    "completion": "73*88=6424"
+  },
+  {
+    "query": "26*67",
+    "completion": "26*67=1742"
+  },
+  {
+    "query": "46*55",
+    "completion": "46*55=2530"
+  },
+  {
+    "query": "97*60",
+    "completion": "97*60=5820"
+  },
+  {
+    "query": "14*36",
+    "completion": "14*36=504"
+  },
+  {
+    "query": "85*32",
+    "completion": "85*32=2720"
+  },
+  {
+    "query": "45*30",
+    "completion": "45*30=1350"
+  },
+  {
+    "query": "98*41",
+    "completion": "98*41=4018"
+  },
+  {
+    "query": "57*6",
+    "completion": "57*6=342"
+  },
+  {
+    "query": "48*94",
+    "completion": "48*94=4512"
+  },
+  {
+    "query": "61*63",
+    "completion": "61*63=3843"
+  },
+  {
+    "query": "67*43",
+    "completion": "67*43=2881"
+  },
+  {
+    "query": "19*27",
+    "completion": "19*27=513"
+  },
+  {
+    "query": "82*70",
+    "completion": "82*70=5740"
+  },
+  {
+    "query": "48*5",
+    "completion": "48*5=240"
+  },
+  {
+    "query": "37*25",
+    "completion": "37*25=925"
+  },
+  {
+    "query": "59*40",
+    "completion": "59*40=2360"
+  },
+  {
+    "query": "66*65",
+    "completion": "66*65=4290"
+  },
+  {
+    "query": "8*47",
+    "completion": "8*47=376"
+  },
+  {
+    "query": "59*23",
+    "completion": "59*23=1357"
+  },
+  {
+    "query": "40*7",
+    "completion": "40*7=280"
+  },
+  {
+    "query": "10*84",
+    "completion": "10*84=840"
+  },
+  {
+    "query": "87*82",
+    "completion": "87*82=7134"
+  },
+  {
+    "query": "91*32",
+    "completion": "91*32=2912"
+  },
+  {
+    "query": "74*25",
+    "completion": "74*25=1850"
+  },
+  {
+    "query": "43*50",
+    "completion": "43*50=2150"
+  },
+  {
+    "query": "8*47",
+    "completion": "8*47=376"
+  },
+  {
+    "query": "73*19",
+    "completion": "73*19=1387"
+  },
+  {
+    "query": "19*54",
+    "completion": "19*54=1026"
+  },
+  {
+    "query": "66*52",
+    "completion": "66*52=3432"
+  },
+  {
+    "query": "96*46",
+    "completion": "96*46=4416"
+  },
+  {
+    "query": "6*13",
+    "completion": "6*13=78"
+  },
+  {
+    "query": "83*83",
+    "completion": "83*83=6889"
+  },
+  {
+    "query": "54*93",
+    "completion": "54*93=5022"
+  },
+  {
+    "query": "63*61",
+    "completion": "63*61=3843"
+  },
+  {
+    "query": "14*56",
+    "completion": "14*56=784"
+  },
+  {
+    "query": "19*84",
+    "completion": "19*84=1596"
+  },
+  {
+    "query": "71*31",
+    "completion": "71*31=2201"
+  },
+  {
+    "query": "66*9",
+    "completion": "66*9=594"
+  },
+  {
+    "query": "60*62",
+    "completion": "60*62=3720"
+  },
+  {
+    "query": "92*81",
+    "completion": "92*81=7452"
+  },
+  {
+    "query": "51*77",
+    "completion": "51*77=3927"
+  },
+  {
+    "query": "44*16",
+    "completion": "44*16=704"
+  },
+  {
+    "query": "81*21",
+    "completion": "81*21=1701"
+  },
+  {
+    "query": "49*49",
+    "completion": "49*49=2401"
+  },
+  {
+    "query": "45*48",
+    "completion": "45*48=2160"
+  },
+  {
+    "query": "42*90",
+    "completion": "42*90=3780"
+  }
+]

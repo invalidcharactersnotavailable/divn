@@ -12,6 +12,20 @@ import (
 	"time"
 )
 
+// CommandFlags structure for command-line flags
+type CommandFlags struct {
+	Seed         int64
+	LayerCount   int
+	NeuronSize   int
+	VectorDims   int
+	FilePath     string
+	CPUProfile   string
+	MemProfile   string
+	ParallelProc bool
+	FullConnect  bool // Flag for full layer interconnection
+	UseBinary    bool // Flag for using binary serialization
+}
+
 // BinarySerializer provides methods for binary serialization and deserialization
 type BinarySerializer struct {
 	// Version of the binary format, for future compatibility
@@ -493,24 +507,10 @@ func BinarySerializationBenchmark(network *Network, filePath string, seed int64)
 	fmt.Printf("File size reduction: %.2fx smaller\n", sizeReduction)
 }
 
-// Command-line flags structure
-type CommandFlags struct {
-	Seed         int64
-	LayerCount   int
-	NeuronSize   int
-	VectorDims   int
-	FilePath     string
-	CPUProfile   string
-	MemProfile   string
-	ParallelProc bool
-	FullConnect  bool // Flag for full layer interconnection
-	UseBinary    bool // Flag for using binary serialization
-}
-
 func main() {
 	// Check if we have enough arguments
 	if len(os.Args) < 2 {
-		printUsage()
+		printUsageUpdated()
 		os.Exit(1)
 	}
 
@@ -525,7 +525,7 @@ func main() {
 		Seed:         time.Now().UnixNano(),
 		LayerCount:   3,
 		NeuronSize:   8,
-		VectorDims:   4,
+		VectorDims:   64, // Increased for text encoding
 		FilePath:     "network",
 		CPUProfile:   "",
 		MemProfile:   "",
@@ -578,10 +578,10 @@ func main() {
 	case "benchmark-serialization":
 		benchmarkSerialization(flags)
 	case "help":
-		printUsage()
+		printUsageUpdated()
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
-		printUsage()
+		printUsageUpdated()
 		os.Exit(1)
 	}
 
@@ -602,8 +602,8 @@ func main() {
 	}
 }
 
-// printUsage prints the usage information
-func printUsage() {
+// printUsageUpdated prints the updated usage information
+func printUsageUpdated() {
 	fmt.Println("Usage: network <command> [options]")
 	fmt.Println("\nCommands:")
 	fmt.Println("  create                Create a new network")

@@ -1,0 +1,402 @@
+[
+  {
+    "query": "8+70",
+    "completion": "8+70=78"
+  },
+  {
+    "query": "79+68",
+    "completion": "79+68=147"
+  },
+  {
+    "query": "27+49",
+    "completion": "27+49=76"
+  },
+  {
+    "query": "55+73",
+    "completion": "55+73=128"
+  },
+  {
+    "query": "56+31",
+    "completion": "56+31=87"
+  },
+  {
+    "query": "12+21",
+    "completion": "12+21=33"
+  },
+  {
+    "query": "11+28",
+    "completion": "11+28=39"
+  },
+  {
+    "query": "60+48",
+    "completion": "60+48=108"
+  },
+  {
+    "query": "28+20",
+    "completion": "28+20=48"
+  },
+  {
+    "query": "15+67",
+    "completion": "15+67=82"
+  },
+  {
+    "query": "69+86",
+    "completion": "69+86=155"
+  },
+  {
+    "query": "51+50",
+    "completion": "51+50=101"
+  },
+  {
+    "query": "72+89",
+    "completion": "72+89=161"
+  },
+  {
+    "query": "23+16",
+    "completion": "23+16=39"
+  },
+  {
+    "query": "51+36",
+    "completion": "51+36=87"
+  },
+  {
+    "query": "52+90",
+    "completion": "52+90=142"
+  },
+  {
+    "query": "20+57",
+    "completion": "20+57=77"
+  },
+  {
+    "query": "58+4",
+    "completion": "58+4=62"
+  },
+  {
+    "query": "94+70",
+    "completion": "94+70=164"
+  },
+  {
+    "query": "10+57",
+    "completion": "10+57=67"
+  },
+  {
+    "query": "96+25",
+    "completion": "96+25=121"
+  },
+  {
+    "query": "2+37",
+    "completion": "2+37=39"
+  },
+  {
+    "query": "27+45",
+    "completion": "27+45=72"
+  },
+  {
+    "query": "79+84",
+    "completion": "79+84=163"
+  },
+  {
+    "query": "94+82",
+    "completion": "94+82=176"
+  },
+  {
+    "query": "35+33",
+    "completion": "35+33=68"
+  },
+  {
+    "query": "21+82",
+    "completion": "21+82=103"
+  },
+  {
+    "query": "92+56",
+    "completion": "92+56=148"
+  },
+  {
+    "query": "10+85",
+    "completion": "10+85=95"
+  },
+  {
+    "query": "11+72",
+    "completion": "11+72=83"
+  },
+  {
+    "query": "14+72",
+    "completion": "14+72=86"
+  },
+  {
+    "query": "7+79",
+    "completion": "7+79=86"
+  },
+  {
+    "query": "75+18",
+    "completion": "75+18=93"
+  },
+  {
+    "query": "86+7",
+    "completion": "86+7=93"
+  },
+  {
+    "query": "14+40",
+    "completion": "14+40=54"
+  },
+  {
+    "query": "88+52",
+    "completion": "88+52=140"
+  },
+  {
+    "query": "48+30",
+    "completion": "48+30=78"
+  },
+  {
+    "query": "99+55",
+    "completion": "99+55=154"
+  },
+  {
+    "query": "89+89",
+    "completion": "89+89=178"
+  },
+  {
+    "query": "53+11",
+    "completion": "53+11=64"
+  },
+  {
+    "query": "73+54",
+    "completion": "73+54=127"
+  },
+  {
+    "query": "39+76",
+    "completion": "39+76=115"
+  },
+  {
+    "query": "70+5",
+    "completion": "70+5=75"
+  },
+  {
+    "query": "71+39",
+    "completion": "71+39=110"
+  },
+  {
+    "query": "18+44",
+    "completion": "18+44=62"
+  },
+  {
+    "query": "7+78",
+    "completion": "7+78=85"
+  },
+  {
+    "query": "4+44",
+    "completion": "4+44=48"
+  },
+  {
+    "query": "88+35",
+    "completion": "88+35=123"
+  },
+  {
+    "query": "34+77",
+    "completion": "34+77=111"
+  },
+  {
+    "query": "39+67",
+    "completion": "39+67=106"
+  },
+  {
+    "query": "57+41",
+    "completion": "57+41=98"
+  },
+  {
+    "query": "6+39",
+    "completion": "6+39=45"
+  },
+  {
+    "query": "88+13",
+    "completion": "88+13=101"
+  },
+  {
+    "query": "68+81",
+    "completion": "68+81=149"
+  },
+  {
+    "query": "22+72",
+    "completion": "22+72=94"
+  },
+  {
+    "query": "6+2",
+    "completion": "6+2=8"
+  },
+  {
+    "query": "35+79",
+    "completion": "35+79=114"
+  },
+  {
+    "query": "39+12",
+    "completion": "39+12=51"
+  },
+  {
+    "query": "25+73",
+    "completion": "25+73=98"
+  },
+  {
+    "query": "66+3",
+    "completion": "66+3=69"
+  },
+  {
+    "query": "89+37",
+    "completion": "89+37=126"
+  },
+  {
+    "query": "27+31",
+    "completion": "27+31=58"
+  },
+  {
+    "query": "81+16",
+    "completion": "81+16=97"
+  },
+  {
+    "query": "9+26",
+    "completion": "9+26=35"
+  },
+  {
+    "query": "29+70",
+    "completion": "29+70=99"
+  },
+  {
+    "query": "30+87",
+    "completion": "30+87=117"
+  },
+  {
+    "query": "78+90",
+    "completion": "78+90=168"
+  },
+  {
+    "query": "53+1",
+    "completion": "53+1=54"
+  },
+  {
+    "query": "16+61",
+    "completion": "16+61=77"
+  },
+  {
+    "query": "80+73",
+    "completion": "80+73=153"
+  },
+  {
+    "query": "35+19",
+    "completion": "35+19=54"
+  },
+  {
+    "query": "2+10",
+    "completion": "2+10=12"
+  },
+  {
+    "query": "78+9",
+    "completion": "78+9=87"
+  },
+  {
+    "query": "10+43",
+    "completion": "10+43=53"
+  },
+  {
+    "query": "95+91",
+    "completion": "95+91=186"
+  },
+  {
+    "query": "24+24",
+    "completion": "24+24=48"
+  },
+  {
+    "query": "3+6",
+    "completion": "3+6=9"
+  },
+  {
+    "query": "67+43",
+    "completion": "67+43=110"
+  },
+  {
+    "query": "92+11",
+    "completion": "92+11=103"
+  },
+  {
+    "query": "29+33",
+    "completion": "29+33=62"
+  },
+  {
+    "query": "39+63",
+    "completion": "39+63=102"
+  },
+  {
+    "query": "28+71",
+    "completion": "28+71=99"
+  },
+  {
+    "query": "15+13",
+    "completion": "15+13=28"
+  },
+  {
+    "query": "89+88",
+    "completion": "89+88=177"
+  },
+  {
+    "query": "62+25",
+    "completion": "62+25=87"
+  },
+  {
+    "query": "75+0",
+    "completion": "75+0=75"
+  },
+  {
+    "query": "5+17",
+    "completion": "5+17=22"
+  },
+  {
+    "query": "71+65",
+    "completion": "71+65=136"
+  },
+  {
+    "query": "7+28",
+    "completion": "7+28=35"
+  },
+  {
+    "query": "23+40",
+    "completion": "23+40=63"
+  },
+  {
+    "query": "83+39",
+    "completion": "83+39=122"
+  },
+  {
+    "query": "86+0",
+    "completion": "86+0=86"
+  },
+  {
+    "query": "47+16",
+    "completion": "47+16=63"
+  },
+  {
+    "query": "22+22",
+    "completion": "22+22=44"
+  },
+  {
+    "query": "16+28",
+    "completion": "16+28=44"
+  },
+  {
+    "query": "39+81",
+    "completion": "39+81=120"
+  },
+  {
+    "query": "21+21",
+    "completion": "21+21=42"
+  },
+  {
+    "query": "64+32",
+    "completion": "64+32=96"
+  },
+  {
+    "query": "65+2",
+    "completion": "65+2=67"
+  },
+  {
+    "query": "4+22",
+    "completion": "4+22=26"
+  }
+]
