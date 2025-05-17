@@ -1,22 +1,160 @@
 package main
 
 import (
-	"encoding/binary"
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
-	"runtime"
-	"runtime/pprof"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ==================== LOGGER IMPLEMENTATION ====================
+
+// LogLevel represents the verbosity level of logging
+type LogLevel int
+
+const (
+	LogLevelNone LogLevel = iota
+	LogLevelError
+	LogLevelInfo
+	LogLevelDebug
+	LogLevelTrace
+)
+
+// Logger provides a configurable logging interface
+type Logger struct {
+	Level       LogLevel
+	Writer      io.Writer
+	ShowTime    bool
+	mu          sync.Mutex
+	startTime   time.Time
+	lastLogTime time.Time
+	// Minimum time between progress logs (to avoid flooding)
+	ProgressInterval time.Duration
+}
+
+// NewLogger creates a new logger with the specified level
+func NewLogger(level LogLevel, writer io.Writer, showTime bool) *Logger {
+	if writer == nil {
+		writer = os.Stdout
+	}
+	now := time.Now()
+	return &Logger{
+		Level:            level,
+		Writer:           writer,
+		ShowTime:         showTime,
+		startTime:        now,
+		lastLogTime:      now,
+		ProgressInterval: 500 * time.Millisecond, // Default to 500ms between progress logs
+	}
+}
+
+// SetLevel changes the logging level
+func (l *Logger) SetLevel(level LogLevel) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.Level = level
+}
+
+// SetProgressInterval sets the minimum time between progress logs
+func (l *Logger) SetProgressInterval(interval time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ProgressInterval = interval
+}
+
+// Error logs an error message
+func (l *Logger) Error(format string, args ...interface{}) {
+	if l.Level >= LogLevelError {
+		l.log("ERROR", format, args...)
+	}
+}
+
+// Info logs an informational message
+func (l *Logger) Info(format string, args ...interface{}) {
+	if l.Level >= LogLevelInfo {
+		l.log("INFO", format, args...)
+	}
+}
+
+// Debug logs a debug message
+func (l *Logger) Debug(format string, args ...interface{}) {
+	if l.Level >= LogLevelDebug {
+		l.log("DEBUG", format, args...)
+	}
+}
+
+// Trace logs a trace message
+func (l *Logger) Trace(format string, args ...interface{}) {
+	if l.Level >= LogLevelTrace {
+		l.log("TRACE", format, args...)
+	}
+}
+
+// Progress logs a progress message with percentage and ETA
+// This function will throttle output based on ProgressInterval
+func (l *Logger) Progress(operation string, current, total int, startTime time.Time) {
+	if l.Level >= LogLevelInfo {
+		l.mu.Lock()
+		now := time.Now()
+		// Only log if enough time has passed since last progress log
+		// or if this is the first or last item
+		if current == 1 || current == total ||
+			now.Sub(l.lastLogTime) >= l.ProgressInterval {
+
+			l.mu.Unlock() // Unlock before calling log
+
+			if total <= 0 {
+				l.Info("%s: Processing item %d", operation, current)
+				return
+			}
+
+			percentage := float64(current) / float64(total) * 100
+			elapsed := time.Since(startTime)
+
+			var eta time.Duration
+			if current > 0 {
+				eta = time.Duration(float64(elapsed) * (float64(total-current) / float64(current)))
+			}
+
+			l.Info("%s: %d/%d (%.1f%%) - ETA: %s",
+				operation, current, total, percentage, FormatDuration(eta))
+
+			l.mu.Lock()
+			l.lastLogTime = now
+		}
+		l.mu.Unlock()
+	}
+}
+
+// log formats and writes a log message
+func (l *Logger) log(level, format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	message := fmt.Sprintf(format, args...)
+
+	if l.ShowTime {
+		elapsed := time.Since(l.startTime)
+		fmt.Fprintf(l.Writer, "[%s][%s] %s\n", FormatDuration(elapsed), level, message)
+	} else {
+		fmt.Fprintf(l.Writer, "[%s] %s\n", level, message)
+	}
+}
+
+// Global logger instance
+var GlobalLogger = NewLogger(LogLevelInfo, os.Stdout, true)
 
 // ==================== VECTOR IMPLEMENTATION ====================
 
@@ -31,10 +169,9 @@ func NewVector(dims int) (*Vector, error) {
 		return nil, fmt.Errorf("vector dimensions must be positive, got %d", dims)
 	}
 
-	v := &Vector{
+	return &Vector{
 		Dimensions: make([]float64, dims),
-	}
-	return v, nil
+	}, nil
 }
 
 // NewRandomVector creates a new vector with random values using provided random source
@@ -43,37 +180,28 @@ func NewRandomVector(dims int, r *rand.Rand) (*Vector, error) {
 		return nil, fmt.Errorf("random source cannot be nil")
 	}
 
-	if dims <= 0 {
-		return nil, fmt.Errorf("vector dimensions must be positive, got %d", dims)
-	}
-
 	v, err := NewVector(dims)
 	if err != nil {
 		return nil, err
 	}
 
+	// Fill dimensions with random values in a single loop
 	for i := range v.Dimensions {
 		v.Dimensions[i] = r.Float64()*2 - 1 // Values between -1 and 1
 	}
+	GlobalLogger.Trace("Created random vector with %d dimensions", dims)
 	return v, nil
 }
 
 // NewUniqueVector creates a vector with a unique dimension configuration
 // The uniqueness is determined by the seed value
 func NewUniqueVector(dims int, seed int64) (*Vector, error) {
-	if dims <= 0 {
-		return nil, fmt.Errorf("vector dimensions must be positive, got %d", dims)
-	}
-
 	r := rand.New(rand.NewSource(seed))
-	v, err := NewVector(dims)
+	v, err := NewRandomVector(dims, r)
 	if err != nil {
 		return nil, err
 	}
-
-	for i := range v.Dimensions {
-		v.Dimensions[i] = r.Float64()*2 - 1 // Values between -1 and 1
-	}
+	GlobalLogger.Trace("Created unique vector with %d dimensions (seed: %d)", dims, seed)
 	return v, nil
 }
 
@@ -93,10 +221,7 @@ func (v *Vector) Transform(data []float64) ([]float64, error) {
 	result := make([]float64, len(v.Dimensions))
 
 	// Determine the minimum length to avoid bounds checking in the loop
-	minLen := len(data)
-	if len(v.Dimensions) < minLen {
-		minLen = len(v.Dimensions)
-	}
+	minLen := min(len(data), len(v.Dimensions))
 
 	// Process the overlapping portion
 	for i := 0; i < minLen; i++ {
@@ -104,10 +229,9 @@ func (v *Vector) Transform(data []float64) ([]float64, error) {
 	}
 
 	// Copy remaining dimensions if vector is longer than data
-	for i := minLen; i < len(v.Dimensions); i++ {
-		result[i] = v.Dimensions[i]
-	}
+	copy(result[minLen:], v.Dimensions[minLen:])
 
+	GlobalLogger.Trace("Transformed data with %d dimensions", len(v.Dimensions))
 	return result, nil
 }
 
@@ -136,6 +260,7 @@ func (v *Vector) Resize(newDims int, r *rand.Rand) error {
 	}
 
 	currentDims := len(v.Dimensions)
+	GlobalLogger.Debug("Resizing vector from %d to %d dimensions", currentDims, newDims)
 
 	// If no change in dimensions, return early
 	if newDims == currentDims {
@@ -146,11 +271,7 @@ func (v *Vector) Resize(newDims int, r *rand.Rand) error {
 	newDimensions := make([]float64, newDims)
 
 	// Copy existing dimensions
-	copyLen := currentDims
-	if newDims < currentDims {
-		copyLen = newDims
-	}
-
+	copyLen := min(currentDims, newDims)
 	copy(newDimensions[:copyLen], v.Dimensions[:copyLen])
 
 	// Initialize new dimensions with random values
@@ -179,17 +300,13 @@ func NewNeuron(vectorDims int, r *rand.Rand) (*Neuron, error) {
 		return nil, fmt.Errorf("random source cannot be nil")
 	}
 
-	if vectorDims <= 0 {
-		return nil, fmt.Errorf("vector dimensions must be positive, got %d", vectorDims)
-	}
-
-	// Generate a UUID for the neuron
-	neuronUUID := uuid.New().String()
-
 	vector, err := NewRandomVector(vectorDims, r)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create vector: %w", err)
 	}
+
+	neuronUUID := uuid.NewString()
+	GlobalLogger.Trace("Created neuron with UUID %s and %d dimensions", neuronUUID, vectorDims)
 
 	return &Neuron{
 		UUID:        neuronUUID,
@@ -201,13 +318,6 @@ func NewNeuron(vectorDims int, r *rand.Rand) (*Neuron, error) {
 
 // NewNeuronWithUniqueVector creates a neuron with a uniquely dimensioned vector
 func NewNeuronWithUniqueVector(vectorDims int, seed int64) (*Neuron, error) {
-	if vectorDims <= 0 {
-		return nil, fmt.Errorf("vector dimensions must be positive, got %d", vectorDims)
-	}
-
-	// Generate a UUID for the neuron
-	neuronUUID := uuid.New().String()
-
 	// Create a deterministic random source for resistance
 	r := rand.New(rand.NewSource(seed))
 
@@ -215,6 +325,9 @@ func NewNeuronWithUniqueVector(vectorDims int, seed int64) (*Neuron, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create unique vector: %w", err)
 	}
+
+	neuronUUID := uuid.NewString()
+	GlobalLogger.Trace("Created neuron with UUID %s and unique vector (seed: %d)", neuronUUID, seed)
 
 	return &Neuron{
 		UUID:        neuronUUID,
@@ -232,15 +345,11 @@ func (n *Neuron) Connect(targetUUID string, strength float64) error {
 	}
 
 	n.mu.Lock()
-	defer n.mu.Unlock()
-
 	// Add to existing connection strength if it exists
-	if existingStrength, exists := n.Connections[targetUUID]; exists {
-		n.Connections[targetUUID] = existingStrength + strength
-	} else {
-		n.Connections[targetUUID] = strength
-	}
+	n.Connections[targetUUID] += strength
+	n.mu.Unlock()
 
+	GlobalLogger.Trace("Connected neuron %s to %s with strength %.4f", n.UUID, targetUUID, strength)
 	return nil
 }
 
@@ -254,6 +363,7 @@ func (n *Neuron) GetConnections() map[string]float64 {
 		connections[uuid] = strength
 	}
 
+	GlobalLogger.Trace("Retrieved %d connections for neuron %s", len(connections), n.UUID)
 	return connections
 }
 
@@ -286,6 +396,7 @@ func (n *Neuron) SetResistance(resistance float64) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
+	GlobalLogger.Trace("Updated neuron %s resistance from %.4f to %.4f", n.UUID, n.Resistance, resistance)
 	n.Resistance = resistance
 }
 
@@ -317,9 +428,13 @@ func NewLayer(name string, width, height, vectorDims int, r *rand.Rand) (*Layer,
 
 	// Calculate capacity for pre-allocation
 	capacity := width * height
+	layerUUID := uuid.NewString()
+
+	GlobalLogger.Info("Creating layer '%s' with %d neurons (%dx%d grid)", name, capacity, width, height)
+	startTime := time.Now()
 
 	layer := &Layer{
-		UUID:    uuid.New().String(),
+		UUID:    layerUUID,
 		Name:    name,
 		Width:   width,
 		Height:  height,
@@ -327,16 +442,21 @@ func NewLayer(name string, width, height, vectorDims int, r *rand.Rand) (*Layer,
 	}
 
 	// Create neurons in a grid pattern
-	for x := 0; x < width; x++ {
-		for y := 0; y < height; y++ {
-			neuron, err := NewNeuron(vectorDims, r)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create neuron at (%d,%d): %w", x, y, err)
-			}
-			layer.Neurons[neuron.UUID] = neuron
+	// Only log progress for large layers (>100 neurons)
+	logProgress := capacity > 100
+	for i := 0; i < capacity; i++ {
+		if logProgress && (i+1)%100 == 0 {
+			GlobalLogger.Progress("Creating neurons", i+1, capacity, startTime)
 		}
+
+		neuron, err := NewNeuron(vectorDims, r)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create neuron at index %d: %w", i, err)
+		}
+		layer.Neurons[neuron.UUID] = neuron
 	}
 
+	GlobalLogger.Info("Layer '%s' created with %d neurons in %s", name, capacity, FormatDuration(time.Since(startTime)))
 	return layer, nil
 }
 
@@ -352,9 +472,13 @@ func NewLayerWithUniqueVectors(name string, width, height, vectorDims int, baseS
 
 	// Calculate capacity for pre-allocation
 	capacity := width * height
+	layerUUID := uuid.NewString()
+
+	GlobalLogger.Info("Creating layer '%s' with %d unique neurons (%dx%d grid)", name, capacity, width, height)
+	startTime := time.Now()
 
 	layer := &Layer{
-		UUID:    uuid.New().String(),
+		UUID:    layerUUID,
 		Name:    name,
 		Width:   width,
 		Height:  height,
@@ -362,17 +486,23 @@ func NewLayerWithUniqueVectors(name string, width, height, vectorDims int, baseS
 	}
 
 	// Create neurons with unique vectors
-	for x := 0; x < width; x++ {
-		for y := 0; y < height; y++ {
-			seed := baseSeed + int64(x*10000+y) // Create a unique seed based on position
-			neuron, err := NewNeuronWithUniqueVector(vectorDims, seed)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create neuron at (%d,%d): %w", x, y, err)
-			}
-			layer.Neurons[neuron.UUID] = neuron
+	// Only log progress for large layers (>100 neurons)
+	logProgress := capacity > 100
+	for i := 0; i < capacity; i++ {
+		if logProgress && (i+1)%100 == 0 {
+			GlobalLogger.Progress("Creating unique neurons", i+1, capacity, startTime)
 		}
+
+		seed := baseSeed + int64(i) // Create a unique seed based on position
+		neuron, err := NewNeuronWithUniqueVector(vectorDims, seed)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create neuron at index %d: %w", i, err)
+		}
+		layer.Neurons[neuron.UUID] = neuron
 	}
 
+	GlobalLogger.Info("Layer '%s' created with %d unique neurons in %s",
+		name, capacity, FormatDuration(time.Since(startTime)))
 	return layer, nil
 }
 
@@ -400,7 +530,19 @@ func (l *Layer) ConnectInternalNeurons(r *rand.Rand) error {
 		neuronUUIDs = append(neuronUUIDs, uuid)
 	}
 
+	neuronCount := len(neuronUUIDs)
+	totalConnections := neuronCount * (neuronCount - 1)
+	connectionsMade := 0
+
+	GlobalLogger.Info("Connecting %d neurons internally in layer '%s' (%d connections)",
+		neuronCount, l.Name, totalConnections)
+	startTime := time.Now()
+
 	// Connect each neuron to ALL other neurons in the layer (fully connected)
+	// Only log progress for large connection operations (>1000 connections)
+	logProgress := totalConnections > 1000
+	progressInterval := max(1, totalConnections/10) // Log at most 10 times
+
 	for _, sourceUUID := range neuronUUIDs {
 		source, exists := l.Neurons[sourceUUID]
 		if !exists {
@@ -415,74 +557,21 @@ func (l *Layer) ConnectInternalNeurons(r *rand.Rand) error {
 			}
 
 			// Random initial connection strength
-			err := source.Connect(targetUUID, r.Float64())
-			if err != nil {
+			if err := source.Connect(targetUUID, r.Float64()); err != nil {
 				return fmt.Errorf("failed to connect %s to %s: %w", sourceUUID, targetUUID, err)
+			}
+			connectionsMade++
+
+			// Log progress at intervals
+			if logProgress && connectionsMade%progressInterval == 0 {
+				GlobalLogger.Progress("Connecting neurons", connectionsMade, totalConnections, startTime)
 			}
 		}
 	}
 
+	GlobalLogger.Info("Connected %d neurons in layer '%s' with %d connections in %s",
+		neuronCount, l.Name, connectionsMade, FormatDuration(time.Since(startTime)))
 	return nil
-}
-
-// SaveToFile saves a single layer to a binary file
-func (l *Layer) SaveToFile(filePath string) error {
-	// Create directory if it doesn't exist
-	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory %s: %w", dir, err)
-	}
-
-	// Create a temporary file in the same directory
-	tempFile := filePath + ".tmp"
-
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-
-	// Create a binary serializer
-	bs := NewBinarySerializer()
-
-	// Open the temporary file for writing
-	file, err := os.Create(tempFile)
-	if err != nil {
-		return fmt.Errorf("failed to create temporary file %s: %w", tempFile, err)
-	}
-	defer file.Close()
-
-	// Write the layer using binary serialization
-	if err := bs.writeLayer(file, l); err != nil {
-		return fmt.Errorf("failed to write layer to binary file: %w", err)
-	}
-
-	// Rename temporary file to target file (atomic operation)
-	if err := os.Rename(tempFile, filePath); err != nil {
-		// Try to clean up the temporary file
-		os.Remove(tempFile)
-		return fmt.Errorf("failed to rename temporary file to %s: %w", filePath, err)
-	}
-
-	return nil
-}
-
-// LoadLayerFromFile loads a layer from a binary file
-func LoadLayerFromFile(filePath string) (*Layer, error) {
-	// Create a binary serializer
-	bs := NewBinarySerializer()
-
-	// Open the file for reading
-	file, err := os.Open(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open file %s: %w", filePath, err)
-	}
-	defer file.Close()
-
-	// Read the layer using binary serialization
-	layer, err := bs.readLayer(file)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read layer from binary file: %w", err)
-	}
-
-	return layer, nil
 }
 
 // ==================== NETWORK IMPLEMENTATION ====================
@@ -503,8 +592,11 @@ func NewNetwork(name string, seed int64) (*Network, error) {
 		return nil, fmt.Errorf("network name cannot be empty")
 	}
 
+	networkUUID := uuid.NewString()
+	GlobalLogger.Info("Creating network '%s' with seed %d", name, seed)
+
 	return &Network{
-		UUID:        uuid.New().String(),
+		UUID:        networkUUID,
 		Name:        name,
 		Layers:      make(map[string]*Layer, 8),     // Pre-allocate with expected size
 		NeuronCache: make(map[string]*Neuron, 1024), // Pre-allocate with expected size
@@ -526,20 +618,42 @@ func (n *Network) AddLayer(layer *Layer) error {
 		return fmt.Errorf("layer with UUID %s already exists", layer.UUID)
 	}
 
+	GlobalLogger.Info("Adding layer '%s' to network '%s'", layer.Name, n.Name)
+	startTime := time.Now()
+
 	n.Layers[layer.UUID] = layer
 
 	// Update neuron cache with all neurons from this layer
+	neuronCount := len(layer.Neurons)
+	neuronIndex := 0
+
+	// Only log progress for large neuron counts (>1000 neurons)
+	logProgress := neuronCount > 1000
 	for neuronUUID, neuron := range layer.Neurons {
+		if logProgress && (neuronIndex+1)%500 == 0 {
+			GlobalLogger.Progress("Caching neurons", neuronIndex+1, neuronCount, startTime)
+		}
+
 		if _, exists := n.NeuronCache[neuronUUID]; exists {
 			return fmt.Errorf("neuron UUID conflict: %s already exists in network", neuronUUID)
 		}
 		n.NeuronCache[neuronUUID] = neuron
+		neuronIndex++
 	}
 
+	GlobalLogger.Info("Added layer '%s' with %d neurons to network in %s",
+		layer.Name, neuronCount, FormatDuration(time.Since(startTime)))
+
 	// Connect neurons within the layer (intraconnections)
+	connectionStartTime := time.Now()
+	GlobalLogger.Info("Connecting neurons within layer '%s'", layer.Name)
+
 	if err := layer.ConnectInternalNeurons(n.rand); err != nil {
 		return fmt.Errorf("failed to connect internal neurons in layer %s: %w", layer.Name, err)
 	}
+
+	GlobalLogger.Info("Connected neurons within layer '%s' in %s",
+		layer.Name, FormatDuration(time.Since(connectionStartTime)))
 
 	return nil
 }
@@ -568,6 +682,9 @@ func (n *Network) ConnectLayers(sourceLayerUUID, targetLayerUUID string) error {
 		return fmt.Errorf("target layer not found: %s", targetLayerUUID)
 	}
 
+	GlobalLogger.Info("Connecting layer '%s' to layer '%s'", sourceLayer.Name, targetLayer.Name)
+	startTime := time.Now()
+
 	// Get all target neuron UUIDs for efficient access
 	targetNeurons := make([]string, 0, len(targetLayer.Neurons))
 	for uuid := range targetLayer.Neurons {
@@ -575,44 +692,67 @@ func (n *Network) ConnectLayers(sourceLayerUUID, targetLayerUUID string) error {
 	}
 
 	// Connect each neuron in source layer to some neurons in target layer
+	sourceNeuronCount := len(sourceLayer.Neurons)
+	neuronIndex := 0
+	totalConnections := 0
+
+	// Only log progress for large source layers (>100 neurons)
+	logProgress := sourceNeuronCount > 100
 	for _, sourceNeuron := range sourceLayer.Neurons {
+		if logProgress && (neuronIndex+1)%50 == 0 {
+			GlobalLogger.Progress("Connecting neurons between layers", neuronIndex+1, sourceNeuronCount, startTime)
+		}
+
 		// Connect to a random subset of neurons in the target layer
-		// This can be modified to use different connection strategies
 		connectionCount := n.rand.Intn(5) + 1 // 1-5 connections per neuron
 
-		// Shuffle and select a subset
-		for i := range targetNeurons {
-			j := n.rand.Intn(i + 1)
+		// Fisher-Yates shuffle for efficient random selection
+		for i := 0; i < min(connectionCount, len(targetNeurons)); i++ {
+			j := n.rand.Intn(len(targetNeurons)-i) + i
 			targetNeurons[i], targetNeurons[j] = targetNeurons[j], targetNeurons[i]
-		}
 
-		// Connect to the selected subset
-		for i := 0; i < connectionCount && i < len(targetNeurons); i++ {
-			err := sourceNeuron.Connect(targetNeurons[i], n.rand.Float64())
-			if err != nil {
+			if err := sourceNeuron.Connect(targetNeurons[i], n.rand.Float64()); err != nil {
 				return fmt.Errorf("failed to connect %s to %s: %w", sourceNeuron.UUID, targetNeurons[i], err)
 			}
+			totalConnections++
 		}
+
+		neuronIndex++
 	}
 
+	GlobalLogger.Info("Connected layer '%s' to layer '%s' with %d connections in %s",
+		sourceLayer.Name, targetLayer.Name, totalConnections, FormatDuration(time.Since(startTime)))
 	return nil
 }
 
 // ConnectAllLayers connects each layer to every other layer in the network
 // This creates a fully connected network where every layer is connected to all others
 func (n *Network) ConnectAllLayers() error {
-	n.mu.Lock()
-
+	n.mu.RLock()
 	// Get all layer UUIDs
 	layerUUIDs := make([]string, 0, len(n.Layers))
 	for uuid := range n.Layers {
 		layerUUIDs = append(layerUUIDs, uuid)
 	}
+	n.mu.RUnlock()
 
-	n.mu.Unlock()
+	layerCount := len(layerUUIDs)
+
+	// Skip if there's only one or zero layers (nothing to connect)
+	if layerCount <= 1 {
+		GlobalLogger.Info("Skipping layer connections for network '%s' (only %d layer present)",
+			n.Name, layerCount)
+		return nil
+	}
+
+	totalConnections := layerCount * (layerCount - 1)
+
+	GlobalLogger.Info("Connecting all %d layers in network '%s' (%d layer connections)",
+		layerCount, n.Name, totalConnections)
+	startTime := time.Now()
+	connectionsMade := 0
 
 	// For each layer, connect it to all other layers
-	totalConnections := 0
 	for i, sourceUUID := range layerUUIDs {
 		for j, targetUUID := range layerUUIDs {
 			// Skip self-connections
@@ -621,550 +761,23 @@ func (n *Network) ConnectAllLayers() error {
 			}
 
 			// Connect the layers
-			err := n.ConnectLayers(sourceUUID, targetUUID)
-			if err != nil {
+			if err := n.ConnectLayers(sourceUUID, targetUUID); err != nil {
+				n.mu.RLock()
+				sourceName := n.Layers[sourceUUID].Name
+				targetName := n.Layers[targetUUID].Name
+				n.mu.RUnlock()
 				return fmt.Errorf("failed to connect layer %s to layer %s: %w",
-					n.Layers[sourceUUID].Name, n.Layers[targetUUID].Name, err)
+					sourceName, targetName, err)
 			}
 
-			totalConnections++
-
-			// Print progress for large networks
-			if len(layerUUIDs) > 10 && totalConnections%100 == 0 {
-				fmt.Printf("Created %d of %d layer connections...\n",
-					totalConnections, len(layerUUIDs)*(len(layerUUIDs)-1))
-			}
+			connectionsMade++
+			GlobalLogger.Progress("Connecting layers", connectionsMade, totalConnections, startTime)
 		}
 	}
 
+	GlobalLogger.Info("Connected all %d layers in network '%s' in %s",
+		layerCount, n.Name, FormatDuration(time.Since(startTime)))
 	return nil
-}
-
-// ProcessData processes input data through the network
-// It returns the final transformed data and the path of neuron UUIDs taken
-func (n *Network) ProcessData(startLayerUUID, startNeuronUUID string, data []float64, maxSteps int) ([]float64, []string, error) {
-	if data == nil {
-		return nil, nil, fmt.Errorf("input data cannot be nil")
-	}
-
-	if maxSteps <= 0 {
-		return nil, nil, fmt.Errorf("maxSteps must be positive")
-	}
-
-	// Validate starting point
-	n.mu.RLock()
-	startLayer, layerExists := n.Layers[startLayerUUID]
-	if !layerExists {
-		n.mu.RUnlock()
-		return nil, nil, fmt.Errorf("starting layer not found: %s", startLayerUUID)
-	}
-	n.mu.RUnlock()
-
-	startNeuron, neuronExists := startLayer.GetNeuron(startNeuronUUID)
-	if !neuronExists {
-		return nil, nil, fmt.Errorf("starting neuron not found: %s", startNeuronUUID)
-	}
-
-	// Initialize processing
-	currentNeuron := startNeuron
-	currentData := data
-	path := make([]string, 0, maxSteps) // Pre-allocate with expected size
-	path = append(path, startNeuronUUID)
-
-	// Process data through the network
-	for step := 0; step < maxSteps; step++ {
-		// Transform data using current neuron
-		var err error
-		currentData, err = currentNeuron.TransformData(currentData)
-		if err != nil {
-			return nil, path, fmt.Errorf("error transforming data at step %d: %w", step, err)
-		}
-
-		// Find the connected neuron with lowest resistance
-		var nextNeuronUUID string
-		lowestResistance := math.MaxFloat64
-
-		// Get all connections from the current neuron
-		connections := currentNeuron.GetConnections()
-
-		for connectedUUID := range connections {
-			// Use the neuron cache for O(1) lookup
-			n.mu.RLock()
-			connectedNeuron, exists := n.NeuronCache[connectedUUID]
-			n.mu.RUnlock()
-
-			if exists {
-				resistance := connectedNeuron.GetResistance()
-				if resistance < lowestResistance {
-					lowestResistance = resistance
-					nextNeuronUUID = connectedUUID
-				}
-			}
-		}
-
-		// If no connected neurons or reached a dead end
-		if nextNeuronUUID == "" {
-			break
-		}
-
-		// Move to the next neuron using the cache
-		n.mu.RLock()
-		nextNeuron, exists := n.NeuronCache[nextNeuronUUID]
-		n.mu.RUnlock()
-
-		if !exists {
-			return nil, path, fmt.Errorf("neuron not found in cache: %s", nextNeuronUUID)
-		}
-
-		currentNeuron = nextNeuron
-		path = append(path, nextNeuronUUID)
-	}
-
-	return currentData, path, nil
-}
-
-// ProcessDataParallel processes multiple data inputs in parallel
-// Returns a slice of results and paths
-func (n *Network) ProcessDataParallel(startLayerUUID, startNeuronUUID string, dataInputs [][]float64, maxSteps int) ([][]float64, [][]string, []error) {
-	if len(dataInputs) == 0 {
-		return nil, nil, nil
-	}
-
-	results := make([][]float64, len(dataInputs))
-	paths := make([][]string, len(dataInputs))
-	errors := make([]error, len(dataInputs))
-
-	// Use a wait group to synchronize goroutines
-	var wg sync.WaitGroup
-	wg.Add(len(dataInputs))
-
-	// Process each input in a separate goroutine
-	for i, data := range dataInputs {
-		go func(idx int, inputData []float64) {
-			defer wg.Done()
-			result, path, err := n.ProcessData(startLayerUUID, startNeuronUUID, inputData, maxSteps)
-			results[idx] = result
-			paths[idx] = path
-			errors[idx] = err
-		}(i, data)
-	}
-
-	// Wait for all goroutines to complete
-	wg.Wait()
-
-	return results, paths, errors
-}
-
-// SaveToFile saves the network to a binary file
-func (n *Network) SaveToFile(filePath string) error {
-	// Create a binary serializer
-	bs := NewBinarySerializer()
-
-	// Use the binary serializer to save the network
-	return bs.SaveNetworkToBinary(n, filePath)
-}
-
-// LoadNetworkFromFile loads a network from a binary file
-func LoadNetworkFromFile(filePath string, seed int64) (*Network, error) {
-	// Create a binary serializer
-	bs := NewBinarySerializer()
-
-	// Use the binary serializer to load the network
-	return bs.LoadNetworkFromBinary(filePath, seed)
-}
-
-// ==================== BINARY SERIALIZER IMPLEMENTATION ====================
-
-// BinarySerializer provides methods for binary serialization and deserialization
-type BinarySerializer struct {
-	// Version of the binary format, for future compatibility
-	Version uint16
-}
-
-// NewBinarySerializer creates a new binary serializer
-func NewBinarySerializer() *BinarySerializer {
-	return &BinarySerializer{
-		Version: 1, // Initial version
-	}
-}
-
-// SaveNetworkToBinary saves a network to a binary file
-func (bs *BinarySerializer) SaveNetworkToBinary(network *Network, filePath string) error {
-	// Create directory if it doesn't exist
-	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory %s: %w", dir, err)
-	}
-
-	// Create a temporary file in the same directory
-	tempFile := filePath + ".tmp"
-	file, err := os.Create(tempFile)
-	if err != nil {
-		return fmt.Errorf("failed to create temporary file %s: %w", tempFile, err)
-	}
-	defer file.Close()
-
-	// Write the binary data
-	if err := bs.writeNetwork(file, network); err != nil {
-		// Clean up the temporary file
-		os.Remove(tempFile)
-		return fmt.Errorf("failed to write network to binary file: %w", err)
-	}
-
-	// Rename temporary file to target file (atomic operation)
-	if err := os.Rename(tempFile, filePath); err != nil {
-		// Try to clean up the temporary file
-		os.Remove(tempFile)
-		return fmt.Errorf("failed to rename temporary file to %s: %w", filePath, err)
-	}
-
-	return nil
-}
-
-// LoadNetworkFromBinary loads a network from a binary file
-func (bs *BinarySerializer) LoadNetworkFromBinary(filePath string, seed int64) (*Network, error) {
-	// Open the file
-	file, err := os.Open(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open file %s: %w", filePath, err)
-	}
-	defer file.Close()
-
-	// Read the binary data
-	network, err := bs.readNetwork(file, seed)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read network from binary file: %w", err)
-	}
-
-	return network, nil
-}
-
-// writeNetwork writes a network to a binary writer
-func (bs *BinarySerializer) writeNetwork(w io.Writer, network *Network) error {
-	// Write format version
-	if err := binary.Write(w, binary.LittleEndian, bs.Version); err != nil {
-		return fmt.Errorf("failed to write format version: %w", err)
-	}
-
-	// Write network UUID
-	if err := bs.writeString(w, network.UUID); err != nil {
-		return fmt.Errorf("failed to write network UUID: %w", err)
-	}
-
-	// Write network name
-	if err := bs.writeString(w, network.Name); err != nil {
-		return fmt.Errorf("failed to write network name: %w", err)
-	}
-
-	// Write number of layers
-	layerCount := uint32(len(network.Layers))
-	if err := binary.Write(w, binary.LittleEndian, layerCount); err != nil {
-		return fmt.Errorf("failed to write layer count: %w", err)
-	}
-
-	// Write each layer
-	for _, layer := range network.Layers {
-		if err := bs.writeLayer(w, layer); err != nil {
-			return fmt.Errorf("failed to write layer: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// readNetwork reads a network from a binary reader
-func (bs *BinarySerializer) readNetwork(r io.Reader, seed int64) (*Network, error) {
-	// Read format version
-	var version uint16
-	if err := binary.Read(r, binary.LittleEndian, &version); err != nil {
-		return nil, fmt.Errorf("failed to read format version: %w", err)
-	}
-
-	// Check version compatibility
-	if version > bs.Version {
-		return nil, fmt.Errorf("unsupported binary format version: %d (supported: %d)", version, bs.Version)
-	}
-
-	// Read network UUID
-	networkUUID, err := bs.readString(r)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read network UUID: %w", err)
-	}
-
-	// Read network name
-	networkName, err := bs.readString(r)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read network name: %w", err)
-	}
-
-	// Create a new network with the read UUID and name
-	network := &Network{
-		UUID:        networkUUID,
-		Name:        networkName,
-		Layers:      make(map[string]*Layer),
-		NeuronCache: make(map[string]*Neuron),
-	}
-
-	// Read number of layers
-	var layerCount uint32
-	if err := binary.Read(r, binary.LittleEndian, &layerCount); err != nil {
-		return nil, fmt.Errorf("failed to read layer count: %w", err)
-	}
-
-	// Read each layer
-	for i := uint32(0); i < layerCount; i++ {
-		layer, err := bs.readLayer(r)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read layer %d: %w", i, err)
-		}
-
-		// Add layer to network
-		network.Layers[layer.UUID] = layer
-
-		// Add neurons to cache
-		for neuronUUID, neuron := range layer.Neurons {
-			network.NeuronCache[neuronUUID] = neuron
-		}
-	}
-
-	return network, nil
-}
-
-// writeLayer writes a layer to a binary writer
-func (bs *BinarySerializer) writeLayer(w io.Writer, layer *Layer) error {
-	// Write layer UUID
-	if err := bs.writeString(w, layer.UUID); err != nil {
-		return fmt.Errorf("failed to write layer UUID: %w", err)
-	}
-
-	// Write layer name
-	if err := bs.writeString(w, layer.Name); err != nil {
-		return fmt.Errorf("failed to write layer name: %w", err)
-	}
-
-	// Write layer dimensions
-	if err := binary.Write(w, binary.LittleEndian, uint32(layer.Width)); err != nil {
-		return fmt.Errorf("failed to write layer width: %w", err)
-	}
-	if err := binary.Write(w, binary.LittleEndian, uint32(layer.Height)); err != nil {
-		return fmt.Errorf("failed to write layer height: %w", err)
-	}
-
-	// Write number of neurons
-	neuronCount := uint32(len(layer.Neurons))
-	if err := binary.Write(w, binary.LittleEndian, neuronCount); err != nil {
-		return fmt.Errorf("failed to write neuron count: %w", err)
-	}
-
-	// Write each neuron
-	for _, neuron := range layer.Neurons {
-		if err := bs.writeNeuron(w, neuron); err != nil {
-			return fmt.Errorf("failed to write neuron: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// readLayer reads a layer from a binary reader
-func (bs *BinarySerializer) readLayer(r io.Reader) (*Layer, error) {
-	// Read layer UUID
-	layerUUID, err := bs.readString(r)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read layer UUID: %w", err)
-	}
-
-	// Read layer name
-	layerName, err := bs.readString(r)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read layer name: %w", err)
-	}
-
-	// Read layer dimensions
-	var width, height uint32
-	if err := binary.Read(r, binary.LittleEndian, &width); err != nil {
-		return nil, fmt.Errorf("failed to read layer width: %w", err)
-	}
-	if err := binary.Read(r, binary.LittleEndian, &height); err != nil {
-		return nil, fmt.Errorf("failed to read layer height: %w", err)
-	}
-
-	// Create a new layer
-	layer := &Layer{
-		UUID:    layerUUID,
-		Name:    layerName,
-		Width:   int(width),
-		Height:  int(height),
-		Neurons: make(map[string]*Neuron),
-	}
-
-	// Read number of neurons
-	var neuronCount uint32
-	if err := binary.Read(r, binary.LittleEndian, &neuronCount); err != nil {
-		return nil, fmt.Errorf("failed to read neuron count: %w", err)
-	}
-
-	// Read each neuron
-	for i := uint32(0); i < neuronCount; i++ {
-		neuron, err := bs.readNeuron(r)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read neuron %d: %w", i, err)
-		}
-
-		// Add neuron to layer
-		layer.Neurons[neuron.UUID] = neuron
-	}
-
-	return layer, nil
-}
-
-// writeNeuron writes a neuron to a binary writer
-func (bs *BinarySerializer) writeNeuron(w io.Writer, neuron *Neuron) error {
-	// Write neuron UUID
-	if err := bs.writeString(w, neuron.UUID); err != nil {
-		return fmt.Errorf("failed to write neuron UUID: %w", err)
-	}
-
-	// Write neuron resistance
-	if err := binary.Write(w, binary.LittleEndian, float32(neuron.Resistance)); err != nil {
-		return fmt.Errorf("failed to write neuron resistance: %w", err)
-	}
-
-	// Write vector dimensions
-	dimCount := uint32(len(neuron.Value.Dimensions))
-	if err := binary.Write(w, binary.LittleEndian, dimCount); err != nil {
-		return fmt.Errorf("failed to write vector dimension count: %w", err)
-	}
-
-	// Write vector values (as float32 for efficiency)
-	for _, dim := range neuron.Value.Dimensions {
-		if err := binary.Write(w, binary.LittleEndian, float32(dim)); err != nil {
-			return fmt.Errorf("failed to write vector dimension: %w", err)
-		}
-	}
-
-	// Write number of connections
-	connectionCount := uint32(len(neuron.Connections))
-	if err := binary.Write(w, binary.LittleEndian, connectionCount); err != nil {
-		return fmt.Errorf("failed to write connection count: %w", err)
-	}
-
-	// Write each connection
-	for targetUUID, strength := range neuron.Connections {
-		// Write target UUID
-		if err := bs.writeString(w, targetUUID); err != nil {
-			return fmt.Errorf("failed to write connection target UUID: %w", err)
-		}
-
-		// Write connection strength
-		if err := binary.Write(w, binary.LittleEndian, float32(strength)); err != nil {
-			return fmt.Errorf("failed to write connection strength: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// readNeuron reads a neuron from a binary reader
-func (bs *BinarySerializer) readNeuron(r io.Reader) (*Neuron, error) {
-	// Read neuron UUID
-	neuronUUID, err := bs.readString(r)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read neuron UUID: %w", err)
-	}
-
-	// Read neuron resistance
-	var resistance float32
-	if err := binary.Read(r, binary.LittleEndian, &resistance); err != nil {
-		return nil, fmt.Errorf("failed to read neuron resistance: %w", err)
-	}
-
-	// Read vector dimensions
-	var dimCount uint32
-	if err := binary.Read(r, binary.LittleEndian, &dimCount); err != nil {
-		return nil, fmt.Errorf("failed to read vector dimension count: %w", err)
-	}
-
-	// Create vector
-	vector := &Vector{
-		Dimensions: make([]float64, dimCount),
-	}
-
-	// Read vector values
-	for i := uint32(0); i < dimCount; i++ {
-		var dim float32
-		if err := binary.Read(r, binary.LittleEndian, &dim); err != nil {
-			return nil, fmt.Errorf("failed to read vector dimension %d: %w", i, err)
-		}
-		vector.Dimensions[i] = float64(dim)
-	}
-
-	// Create neuron
-	neuron := &Neuron{
-		UUID:        neuronUUID,
-		Value:       vector,
-		Resistance:  float64(resistance),
-		Connections: make(map[string]float64),
-	}
-
-	// Read number of connections
-	var connectionCount uint32
-	if err := binary.Read(r, binary.LittleEndian, &connectionCount); err != nil {
-		return nil, fmt.Errorf("failed to read connection count: %w", err)
-	}
-
-	// Read each connection
-	for i := uint32(0); i < connectionCount; i++ {
-		// Read target UUID
-		targetUUID, err := bs.readString(r)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read connection target UUID: %w", err)
-		}
-
-		// Read connection strength
-		var strength float32
-		if err := binary.Read(r, binary.LittleEndian, &strength); err != nil {
-			return nil, fmt.Errorf("failed to read connection strength: %w", err)
-		}
-
-		// Add connection
-		neuron.Connections[targetUUID] = float64(strength)
-	}
-
-	return neuron, nil
-}
-
-// writeString writes a string to a binary writer
-func (bs *BinarySerializer) writeString(w io.Writer, s string) error {
-	// Write string length
-	length := uint32(len(s))
-	if err := binary.Write(w, binary.LittleEndian, length); err != nil {
-		return fmt.Errorf("failed to write string length: %w", err)
-	}
-
-	// Write string data
-	if _, err := w.Write([]byte(s)); err != nil {
-		return fmt.Errorf("failed to write string data: %w", err)
-	}
-
-	return nil
-}
-
-// readString reads a string from a binary reader
-func (bs *BinarySerializer) readString(r io.Reader) (string, error) {
-	// Read string length
-	var length uint32
-	if err := binary.Read(r, binary.LittleEndian, &length); err != nil {
-		return "", fmt.Errorf("failed to read string length: %w", err)
-	}
-
-	// Read string data
-	data := make([]byte, length)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return "", fmt.Errorf("failed to read string data: %w", err)
-	}
-
-	return string(data), nil
 }
 
 // ==================== JSON SERIALIZER IMPLEMENTATION ====================
@@ -1215,19 +828,275 @@ func (js *JSONSerializer) SaveNetworkToJSON(network *Network, filePath string) e
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
 
-	// Convert network to JSON structure
-	networkJSON := js.networkToJSON(network)
-
-	// Marshal to JSON
-	data, err := json.MarshalIndent(networkJSON, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal network to JSON: %w", err)
-	}
+	GlobalLogger.Info("Saving network '%s' to file %s", network.Name, filePath)
+	startTime := time.Now()
 
 	// Create a temporary file in the same directory
 	tempFile := filePath + ".tmp"
-	if err := os.WriteFile(tempFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write JSON to temporary file: %w", err)
+	file, err := os.Create(tempFile)
+	if err != nil {
+		return fmt.Errorf("failed to create temporary file: %w", err)
+	}
+	defer file.Close()
+
+	// Create a buffered writer for better performance
+	writer := bufio.NewWriter(file)
+
+	// Write the opening brace
+	if _, err := writer.WriteString("{\n"); err != nil {
+		return fmt.Errorf("failed to write opening brace: %w", err)
+	}
+
+	// Write version
+	if _, err := writer.WriteString(fmt.Sprintf("  \"version\": %d,\n", js.Version)); err != nil {
+		return fmt.Errorf("failed to write version: %w", err)
+	}
+
+	// Lock the network for reading
+	network.mu.RLock()
+
+	// Write UUID and name
+	if _, err := writer.WriteString(fmt.Sprintf("  \"uuid\": \"%s\",\n", network.UUID)); err != nil {
+		network.mu.RUnlock()
+		return fmt.Errorf("failed to write UUID: %w", err)
+	}
+
+	if _, err := writer.WriteString(fmt.Sprintf("  \"name\": \"%s\",\n", network.Name)); err != nil {
+		network.mu.RUnlock()
+		return fmt.Errorf("failed to write name: %w", err)
+	}
+
+	// Write layers opening
+	if _, err := writer.WriteString("  \"layers\": {\n"); err != nil {
+		network.mu.RUnlock()
+		return fmt.Errorf("failed to write layers opening: %w", err)
+	}
+
+	// Get all layer UUIDs
+	layerUUIDs := make([]string, 0, len(network.Layers))
+	for uuid := range network.Layers {
+		layerUUIDs = append(layerUUIDs, uuid)
+	}
+
+	layerCount := len(layerUUIDs)
+	GlobalLogger.Info("Serializing %d layers", layerCount)
+
+	// Write each layer
+	for i, layerUUID := range layerUUIDs {
+		layer := network.Layers[layerUUID]
+
+		GlobalLogger.Progress("Serializing layers", i+1, layerCount, startTime)
+
+		// Write layer opening
+		if _, err := writer.WriteString(fmt.Sprintf("    \"%s\": {\n", layerUUID)); err != nil {
+			network.mu.RUnlock()
+			return fmt.Errorf("failed to write layer opening: %w", err)
+		}
+
+		// Write layer properties
+		if _, err := writer.WriteString(fmt.Sprintf("      \"uuid\": \"%s\",\n", layer.UUID)); err != nil {
+			network.mu.RUnlock()
+			return fmt.Errorf("failed to write layer UUID: %w", err)
+		}
+
+		if _, err := writer.WriteString(fmt.Sprintf("      \"name\": \"%s\",\n", layer.Name)); err != nil {
+			network.mu.RUnlock()
+			return fmt.Errorf("failed to write layer name: %w", err)
+		}
+
+		if _, err := writer.WriteString(fmt.Sprintf("      \"width\": %d,\n", layer.Width)); err != nil {
+			network.mu.RUnlock()
+			return fmt.Errorf("failed to write layer width: %w", err)
+		}
+
+		if _, err := writer.WriteString(fmt.Sprintf("      \"height\": %d,\n", layer.Height)); err != nil {
+			network.mu.RUnlock()
+			return fmt.Errorf("failed to write layer height: %w", err)
+		}
+
+		// Write neurons opening
+		if _, err := writer.WriteString("      \"neurons\": {\n"); err != nil {
+			network.mu.RUnlock()
+			return fmt.Errorf("failed to write neurons opening: %w", err)
+		}
+
+		// Get all neuron UUIDs for this layer
+		neuronUUIDs := make([]string, 0, len(layer.Neurons))
+		for uuid := range layer.Neurons {
+			neuronUUIDs = append(neuronUUIDs, uuid)
+		}
+
+		neuronCount := len(neuronUUIDs)
+		layerStartTime := time.Now()
+		GlobalLogger.Info("Serializing %d neurons in layer '%s'", neuronCount, layer.Name)
+
+		// Write each neuron
+		// Only log progress for large neuron counts (>1000 neurons)
+		logProgress := neuronCount > 1000
+		for j, neuronUUID := range neuronUUIDs {
+			if logProgress && (j+1)%500 == 0 {
+				GlobalLogger.Progress("Serializing neurons", j+1, neuronCount, layerStartTime)
+			}
+
+			neuron := layer.Neurons[neuronUUID]
+
+			// Lock the neuron for reading
+			neuron.mu.RLock()
+
+			// Write neuron opening
+			if _, err := writer.WriteString(fmt.Sprintf("        \"%s\": {\n", neuronUUID)); err != nil {
+				neuron.mu.RUnlock()
+				network.mu.RUnlock()
+				return fmt.Errorf("failed to write neuron opening: %w", err)
+			}
+
+			// Write neuron properties
+			if _, err := writer.WriteString(fmt.Sprintf("          \"uuid\": \"%s\",\n", neuron.UUID)); err != nil {
+				neuron.mu.RUnlock()
+				network.mu.RUnlock()
+				return fmt.Errorf("failed to write neuron UUID: %w", err)
+			}
+
+			if _, err := writer.WriteString(fmt.Sprintf("          \"resistance\": %f,\n", neuron.Resistance)); err != nil {
+				neuron.mu.RUnlock()
+				network.mu.RUnlock()
+				return fmt.Errorf("failed to write neuron resistance: %w", err)
+			}
+
+			// Write vector
+			if _, err := writer.WriteString("          \"vector\": ["); err != nil {
+				neuron.mu.RUnlock()
+				network.mu.RUnlock()
+				return fmt.Errorf("failed to write vector opening: %w", err)
+			}
+
+			for k, dim := range neuron.Value.Dimensions {
+				if k > 0 {
+					if _, err := writer.WriteString(", "); err != nil {
+						neuron.mu.RUnlock()
+						network.mu.RUnlock()
+						return fmt.Errorf("failed to write vector separator: %w", err)
+					}
+				}
+
+				if _, err := writer.WriteString(fmt.Sprintf("%f", dim)); err != nil {
+					neuron.mu.RUnlock()
+					network.mu.RUnlock()
+					return fmt.Errorf("failed to write vector dimension: %w", err)
+				}
+			}
+
+			if _, err := writer.WriteString("],\n"); err != nil {
+				neuron.mu.RUnlock()
+				network.mu.RUnlock()
+				return fmt.Errorf("failed to write vector closing: %w", err)
+			}
+
+			// Write connections opening
+			if _, err := writer.WriteString("          \"connections\": {\n"); err != nil {
+				neuron.mu.RUnlock()
+				network.mu.RUnlock()
+				return fmt.Errorf("failed to write connections opening: %w", err)
+			}
+
+			// Get all connection UUIDs
+			connectionUUIDs := make([]string, 0, len(neuron.Connections))
+			for uuid := range neuron.Connections {
+				connectionUUIDs = append(connectionUUIDs, uuid)
+			}
+
+			// Write each connection
+			for k, connectionUUID := range connectionUUIDs {
+				strength := neuron.Connections[connectionUUID]
+
+				if _, err := writer.WriteString(fmt.Sprintf("            \"%s\": %f", connectionUUID, strength)); err != nil {
+					neuron.mu.RUnlock()
+					network.mu.RUnlock()
+					return fmt.Errorf("failed to write connection: %w", err)
+				}
+
+				if k < len(connectionUUIDs)-1 {
+					if _, err := writer.WriteString(",\n"); err != nil {
+						neuron.mu.RUnlock()
+						network.mu.RUnlock()
+						return fmt.Errorf("failed to write connection separator: %w", err)
+					}
+				} else {
+					if _, err := writer.WriteString("\n"); err != nil {
+						neuron.mu.RUnlock()
+						network.mu.RUnlock()
+						return fmt.Errorf("failed to write connection newline: %w", err)
+					}
+				}
+			}
+
+			// Write connections closing
+			if _, err := writer.WriteString("          }\n"); err != nil {
+				neuron.mu.RUnlock()
+				network.mu.RUnlock()
+				return fmt.Errorf("failed to write connections closing: %w", err)
+			}
+
+			// Write neuron closing
+			if j < len(neuronUUIDs)-1 {
+				if _, err := writer.WriteString("        },\n"); err != nil {
+					neuron.mu.RUnlock()
+					network.mu.RUnlock()
+					return fmt.Errorf("failed to write neuron closing: %w", err)
+				}
+			} else {
+				if _, err := writer.WriteString("        }\n"); err != nil {
+					neuron.mu.RUnlock()
+					network.mu.RUnlock()
+					return fmt.Errorf("failed to write neuron closing: %w", err)
+				}
+			}
+
+			// Unlock the neuron
+			neuron.mu.RUnlock()
+		}
+
+		// Write neurons closing
+		if _, err := writer.WriteString("      }\n"); err != nil {
+			network.mu.RUnlock()
+			return fmt.Errorf("failed to write neurons closing: %w", err)
+		}
+
+		// Write layer closing
+		if i < len(layerUUIDs)-1 {
+			if _, err := writer.WriteString("    },\n"); err != nil {
+				network.mu.RUnlock()
+				return fmt.Errorf("failed to write layer closing: %w", err)
+			}
+		} else {
+			if _, err := writer.WriteString("    }\n"); err != nil {
+				network.mu.RUnlock()
+				return fmt.Errorf("failed to write layer closing: %w", err)
+			}
+		}
+	}
+
+	// Unlock the network
+	network.mu.RUnlock()
+
+	// Write layers closing
+	if _, err := writer.WriteString("  }\n"); err != nil {
+		return fmt.Errorf("failed to write layers closing: %w", err)
+	}
+
+	// Write the closing brace
+	if _, err := writer.WriteString("}\n"); err != nil {
+		return fmt.Errorf("failed to write closing brace: %w", err)
+	}
+
+	// Flush the buffer to ensure all data is written
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("failed to flush buffer: %w", err)
+	}
+
+	// Close the file
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("failed to close file: %w", err)
 	}
 
 	// Rename temporary file to target file (atomic operation)
@@ -1237,16 +1106,44 @@ func (js *JSONSerializer) SaveNetworkToJSON(network *Network, filePath string) e
 		return fmt.Errorf("failed to rename temporary file to %s: %w", filePath, err)
 	}
 
+	GlobalLogger.Info("Network '%s' saved to %s in %s",
+		network.Name, filePath, FormatDuration(time.Since(startTime)))
 	return nil
 }
 
 // LoadNetworkFromJSON loads a network from a JSON file
 func (js *JSONSerializer) LoadNetworkFromJSON(filePath string, seed int64) (*Network, error) {
-	// Read the JSON file
-	data, err := os.ReadFile(filePath)
+	GlobalLogger.Info("Loading network from file %s", filePath)
+	startTime := time.Now()
+
+	// Open the JSON file
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open JSON file: %w", err)
+	}
+	defer file.Close()
+
+	// Get file size for progress reporting
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file info: %w", err)
+	}
+	fileSize := fileInfo.Size()
+
+	GlobalLogger.Info("Reading network file (%d bytes)", fileSize)
+
+	// Create a buffered reader for better performance
+	reader := bufio.NewReader(file)
+
+	// Read the entire file into memory
+	// For very large files, we would use streaming JSON parsing
+	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read JSON file: %w", err)
 	}
+
+	GlobalLogger.Info("Parsing JSON data (%d bytes read)", len(data))
+	parseStartTime := time.Now()
 
 	// Unmarshal JSON
 	var networkJSON NetworkJSON
@@ -1254,57 +1151,99 @@ func (js *JSONSerializer) LoadNetworkFromJSON(filePath string, seed int64) (*Net
 		return nil, fmt.Errorf("failed to unmarshal JSON: %w", err)
 	}
 
+	GlobalLogger.Info("JSON parsed in %s", FormatDuration(time.Since(parseStartTime)))
+	conversionStartTime := time.Now()
+
 	// Convert JSON structure to network
 	network, err := js.jsonToNetwork(networkJSON, seed)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert JSON to network: %w", err)
 	}
 
+	GlobalLogger.Info("Network '%s' loaded from %s in %s (parsing: %s, conversion: %s)",
+		network.Name, filePath, FormatDuration(time.Since(startTime)),
+		FormatDuration(time.Since(parseStartTime)-time.Since(conversionStartTime)),
+		FormatDuration(time.Since(conversionStartTime)))
 	return network, nil
 }
 
 // networkToJSON converts a network to its JSON representation
 func (js *JSONSerializer) networkToJSON(network *Network) NetworkJSON {
+	network.mu.RLock()
+	defer network.mu.RUnlock()
+
+	GlobalLogger.Debug("Converting network '%s' to JSON representation", network.Name)
+	startTime := time.Now()
+
 	networkJSON := NetworkJSON{
 		Version: js.Version,
 		UUID:    network.UUID,
 		Name:    network.Name,
-		Layers:  make(map[string]LayerJSON),
+		Layers:  make(map[string]LayerJSON, len(network.Layers)),
 	}
 
 	// Convert each layer
+	layerCount := len(network.Layers)
+	layerIndex := 0
+
 	for uuid, layer := range network.Layers {
+		if layerIndex > 0 && layerIndex%10 == 0 {
+			GlobalLogger.Progress("Converting layers to JSON", layerIndex+1, layerCount, startTime)
+		}
+
 		networkJSON.Layers[uuid] = js.layerToJSON(layer)
+		layerIndex++
 	}
 
+	GlobalLogger.Debug("Converted network to JSON in %s", FormatDuration(time.Since(startTime)))
 	return networkJSON
 }
 
 // layerToJSON converts a layer to its JSON representation
 func (js *JSONSerializer) layerToJSON(layer *Layer) LayerJSON {
+	layer.mu.RLock()
+	defer layer.mu.RUnlock()
+
+	GlobalLogger.Debug("Converting layer '%s' to JSON representation", layer.Name)
+	startTime := time.Now()
+
 	layerJSON := LayerJSON{
 		UUID:    layer.UUID,
 		Name:    layer.Name,
 		Width:   layer.Width,
 		Height:  layer.Height,
-		Neurons: make(map[string]NeuronJSON),
+		Neurons: make(map[string]NeuronJSON, len(layer.Neurons)),
 	}
 
 	// Convert each neuron
+	neuronCount := len(layer.Neurons)
+	neuronIndex := 0
+
+	// Only log progress for large neuron counts (>1000 neurons)
+	logProgress := neuronCount > 1000
 	for uuid, neuron := range layer.Neurons {
+		if logProgress && (neuronIndex+1)%500 == 0 {
+			GlobalLogger.Progress("Converting neurons to JSON", neuronIndex+1, neuronCount, startTime)
+		}
+
 		layerJSON.Neurons[uuid] = js.neuronToJSON(neuron)
+		neuronIndex++
 	}
 
+	GlobalLogger.Debug("Converted layer '%s' to JSON in %s", layer.Name, FormatDuration(time.Since(startTime)))
 	return layerJSON
 }
 
 // neuronToJSON converts a neuron to its JSON representation
 func (js *JSONSerializer) neuronToJSON(neuron *Neuron) NeuronJSON {
+	neuron.mu.RLock()
+	defer neuron.mu.RUnlock()
+
 	neuronJSON := NeuronJSON{
 		UUID:        neuron.UUID,
 		Resistance:  neuron.Resistance,
 		Vector:      make([]float64, len(neuron.Value.Dimensions)),
-		Connections: make(map[string]float64),
+		Connections: make(map[string]float64, len(neuron.Connections)),
 	}
 
 	// Copy vector dimensions
@@ -1320,16 +1259,35 @@ func (js *JSONSerializer) neuronToJSON(neuron *Neuron) NeuronJSON {
 
 // jsonToNetwork converts a JSON representation to a network
 func (js *JSONSerializer) jsonToNetwork(networkJSON NetworkJSON, seed int64) (*Network, error) {
+	GlobalLogger.Info("Converting JSON to network '%s'", networkJSON.Name)
+	startTime := time.Now()
+
 	// Create a new network
 	network := &Network{
 		UUID:        networkJSON.UUID,
 		Name:        networkJSON.Name,
-		Layers:      make(map[string]*Layer),
+		Layers:      make(map[string]*Layer, len(networkJSON.Layers)),
 		NeuronCache: make(map[string]*Neuron),
+		rand:        rand.New(rand.NewSource(seed)),
 	}
 
+	// Estimate neuron cache size for pre-allocation
+	neuronCount := 0
+	for _, layerJSON := range networkJSON.Layers {
+		neuronCount += len(layerJSON.Neurons)
+	}
+	network.NeuronCache = make(map[string]*Neuron, neuronCount)
+
+	GlobalLogger.Info("Network has %d layers and approximately %d neurons",
+		len(networkJSON.Layers), neuronCount)
+
 	// Convert each layer
+	layerCount := len(networkJSON.Layers)
+	layerIndex := 0
+
 	for uuid, layerJSON := range networkJSON.Layers {
+		GlobalLogger.Progress("Converting layers from JSON", layerIndex+1, layerCount, startTime)
+
 		layer, err := js.jsonToLayer(layerJSON)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert layer %s: %w", uuid, err)
@@ -1337,34 +1295,69 @@ func (js *JSONSerializer) jsonToNetwork(networkJSON NetworkJSON, seed int64) (*N
 		network.Layers[uuid] = layer
 
 		// Add neurons to cache
+		neuronCount := len(layer.Neurons)
+		neuronIndex := 0
+		layerStartTime := time.Now()
+
+		GlobalLogger.Debug("Adding %d neurons from layer '%s' to cache", neuronCount, layer.Name)
+
+		// Only log progress for large neuron counts (>1000 neurons)
+		logProgress := neuronCount > 1000
 		for neuronUUID, neuron := range layer.Neurons {
+			if logProgress && (neuronIndex+1)%500 == 0 {
+				GlobalLogger.Progress("Caching neurons", neuronIndex+1, neuronCount, layerStartTime)
+			}
+
 			network.NeuronCache[neuronUUID] = neuron
+			neuronIndex++
 		}
+
+		GlobalLogger.Debug("Added %d neurons from layer '%s' to cache in %s",
+			neuronCount, layer.Name, FormatDuration(time.Since(layerStartTime)))
+
+		layerIndex++
 	}
 
+	GlobalLogger.Info("Converted JSON to network '%s' in %s",
+		network.Name, FormatDuration(time.Since(startTime)))
 	return network, nil
 }
 
 // jsonToLayer converts a JSON representation to a layer
 func (js *JSONSerializer) jsonToLayer(layerJSON LayerJSON) (*Layer, error) {
+	GlobalLogger.Debug("Converting JSON to layer '%s'", layerJSON.Name)
+	startTime := time.Now()
+
 	// Create a new layer
 	layer := &Layer{
 		UUID:    layerJSON.UUID,
 		Name:    layerJSON.Name,
 		Width:   layerJSON.Width,
 		Height:  layerJSON.Height,
-		Neurons: make(map[string]*Neuron),
+		Neurons: make(map[string]*Neuron, len(layerJSON.Neurons)),
 	}
 
 	// Convert each neuron
+	neuronCount := len(layerJSON.Neurons)
+	neuronIndex := 0
+
+	// Only log progress for large neuron counts (>1000 neurons)
+	logProgress := neuronCount > 1000
 	for uuid, neuronJSON := range layerJSON.Neurons {
+		if logProgress && (neuronIndex+1)%500 == 0 {
+			GlobalLogger.Progress("Converting neurons from JSON", neuronIndex+1, neuronCount, startTime)
+		}
+
 		neuron, err := js.jsonToNeuron(neuronJSON)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert neuron %s: %w", uuid, err)
 		}
 		layer.Neurons[uuid] = neuron
+		neuronIndex++
 	}
 
+	GlobalLogger.Debug("Converted JSON to layer '%s' with %d neurons in %s",
+		layerJSON.Name, neuronCount, FormatDuration(time.Since(startTime)))
 	return layer, nil
 }
 
@@ -1383,7 +1376,7 @@ func (js *JSONSerializer) jsonToNeuron(neuronJSON NeuronJSON) (*Neuron, error) {
 		UUID:        neuronJSON.UUID,
 		Value:       vector,
 		Resistance:  neuronJSON.Resistance,
-		Connections: make(map[string]float64),
+		Connections: make(map[string]float64, len(neuronJSON.Connections)),
 	}
 
 	// Copy connections
@@ -1394,1187 +1387,717 @@ func (js *JSONSerializer) jsonToNeuron(neuronJSON NeuronJSON) (*Neuron, error) {
 	return neuron, nil
 }
 
-// GetNetworkJSON returns the JSON representation of a network
-func (js *JSONSerializer) GetNetworkJSON(network *Network) ([]byte, error) {
-	// Convert network to JSON structure
-	networkJSON := js.networkToJSON(network)
+// ==================== TIMING AND PROGRESS TRACKING ====================
 
-	// Marshal to JSON
-	data, err := json.MarshalIndent(networkJSON, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal network to JSON: %w", err)
+// ProgressTracker tracks progress and timing information for network creation
+type ProgressTracker struct {
+	StartTime                 time.Time
+	LayerCreationTimes        []time.Duration
+	NeuronConnectionTimes     []time.Duration
+	LayerConnectionTimes      []time.Duration
+	TotalLayers               int
+	CompletedLayers           int
+	TotalLayerConnections     int
+	CompletedLayerConnections int
+	mu                        sync.Mutex // Added mutex for thread safety
+}
+
+// NewProgressTracker creates a new progress tracker
+func NewProgressTracker(totalLayers int) *ProgressTracker {
+	totalConnections := totalLayers * (totalLayers - 1)
+	return &ProgressTracker{
+		StartTime:             time.Now(),
+		LayerCreationTimes:    make([]time.Duration, 0, totalLayers),
+		NeuronConnectionTimes: make([]time.Duration, 0, totalLayers),
+		LayerConnectionTimes:  make([]time.Duration, 0, totalConnections),
+		TotalLayers:           totalLayers,
+		TotalLayerConnections: totalConnections,
+	}
+}
+
+// RecordLayerCreation records the time taken to create a layer
+func (pt *ProgressTracker) RecordLayerCreation(duration time.Duration) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+
+	pt.LayerCreationTimes = append(pt.LayerCreationTimes, duration)
+	pt.CompletedLayers++
+
+	GlobalLogger.Info("Layer creation recorded: %s (avg: %s)",
+		FormatDuration(duration), FormatDuration(pt.GetAverageLayerCreationTime()))
+}
+
+// RecordNeuronConnections records the time taken to connect neurons within a layer
+func (pt *ProgressTracker) RecordNeuronConnections(duration time.Duration) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+
+	pt.NeuronConnectionTimes = append(pt.NeuronConnectionTimes, duration)
+
+	GlobalLogger.Info("Neuron connections recorded: %s (avg: %s)",
+		FormatDuration(duration), FormatDuration(pt.GetAverageNeuronConnectionTime()))
+}
+
+// RecordLayerConnection records the time taken to connect two layers
+func (pt *ProgressTracker) RecordLayerConnection(duration time.Duration) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+
+	pt.LayerConnectionTimes = append(pt.LayerConnectionTimes, duration)
+	pt.CompletedLayerConnections++
+
+	GlobalLogger.Info("Layer connection recorded: %s (avg: %s, %d/%d complete)",
+		FormatDuration(duration), FormatDuration(pt.GetAverageLayerConnectionTime()),
+		pt.CompletedLayerConnections, pt.TotalLayerConnections)
+}
+
+// GetAverageLayerCreationTime returns the average time to create a layer
+func (pt *ProgressTracker) GetAverageLayerCreationTime() time.Duration {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+
+	if len(pt.LayerCreationTimes) == 0 {
+		return 0
 	}
 
-	return data, nil
+	var total time.Duration
+	for _, t := range pt.LayerCreationTimes {
+		total += t
+	}
+	return total / time.Duration(len(pt.LayerCreationTimes))
 }
 
-// ==================== CONNECTION MAP IMPLEMENTATION ====================
+// GetAverageNeuronConnectionTime returns the average time to connect neurons within a layer
+func (pt *ProgressTracker) GetAverageNeuronConnectionTime() time.Duration {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
 
-// ConnectionMap represents a separate storage for network connections
-type ConnectionMap struct {
-	NetworkUUID string                        `json:"network_uuid"`
-	NetworkName string                        `json:"network_name"`
-	Layers      map[string]LayerConnectionMap `json:"layers"`
-	Version     int                           `json:"version"`
-}
-
-// LayerConnectionMap represents connections for a specific layer
-type LayerConnectionMap struct {
-	LayerUUID string                         `json:"layer_uuid"`
-	LayerName string                         `json:"layer_name"`
-	Neurons   map[string]NeuronConnectionMap `json:"neurons"`
-}
-
-// NeuronConnectionMap represents connections for a specific neuron
-type NeuronConnectionMap struct {
-	NeuronUUID  string             `json:"neuron_uuid"`
-	Connections map[string]float64 `json:"connections"`
-}
-
-// NewConnectionMap creates a new connection map for a network
-func NewConnectionMap(network *Network) *ConnectionMap {
-	connectionMap := &ConnectionMap{
-		NetworkUUID: network.UUID,
-		NetworkName: network.Name,
-		Layers:      make(map[string]LayerConnectionMap),
-		Version:     1, // Initial version
+	if len(pt.NeuronConnectionTimes) == 0 {
+		return 0
 	}
 
-	// Extract connection information from the network
-	for layerUUID, layer := range network.Layers {
-		layerMap := LayerConnectionMap{
-			LayerUUID: layerUUID,
-			LayerName: layer.Name,
-			Neurons:   make(map[string]NeuronConnectionMap),
+	var total time.Duration
+	for _, t := range pt.NeuronConnectionTimes {
+		total += t
+	}
+	return total / time.Duration(len(pt.NeuronConnectionTimes))
+}
+
+// GetAverageLayerConnectionTime returns the average time to connect two layers
+func (pt *ProgressTracker) GetAverageLayerConnectionTime() time.Duration {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+
+	if len(pt.LayerConnectionTimes) == 0 {
+		return 0
+	}
+
+	var total time.Duration
+	for _, t := range pt.LayerConnectionTimes {
+		total += t
+	}
+	return total / time.Duration(len(pt.LayerConnectionTimes))
+}
+
+// GetTotalTime returns the total time elapsed since tracking started
+func (pt *ProgressTracker) GetTotalTime() time.Duration {
+	return time.Since(pt.StartTime)
+}
+
+// GetEstimatedTimeRemaining returns the estimated time remaining for the operation
+func (pt *ProgressTracker) GetEstimatedTimeRemaining() time.Duration {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+
+	if pt.CompletedLayers == 0 {
+		return 0 // Can't estimate yet
+	}
+
+	elapsed := time.Since(pt.StartTime)
+
+	// Calculate progress as a percentage
+	layerProgress := float64(pt.CompletedLayers) / float64(pt.TotalLayers)
+
+	// If we're still creating layers
+	if layerProgress < 1.0 {
+		// Estimate based on layer creation progress
+		return time.Duration(float64(elapsed) * (1.0/layerProgress - 1.0))
+	}
+
+	// If we're connecting layers
+	if pt.CompletedLayerConnections < pt.TotalLayerConnections {
+		connectionProgress := float64(pt.CompletedLayerConnections) / float64(pt.TotalLayerConnections)
+		// We're 50% done with layer creation, 50% with connections
+		totalProgress := 0.5 + 0.5*connectionProgress
+		return time.Duration(float64(elapsed) * (1.0/totalProgress - 1.0))
+	}
+
+	return 0 // All done
+}
+
+// FormatDuration formats a duration in a human-readable format
+func FormatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%d ms", d.Milliseconds())
+	} else if d < time.Minute {
+		return fmt.Sprintf("%.2f sec", d.Seconds())
+	} else {
+		minutes := int(d.Minutes())
+		seconds := int(d.Seconds()) % 60
+		return fmt.Sprintf("%d min %d sec", minutes, seconds)
+	}
+}
+
+// ==================== CLI IMPLEMENTATION ====================
+
+func main() {
+	// Define global flags
+	verbosityPtr := flag.Int("v", 2, "Verbosity level (0=none, 1=error, 2=info, 3=debug, 4=trace)")
+	logFilePtr := flag.String("log", "", "Log file path (default: stdout)")
+
+	// Check if any arguments were provided
+	if len(os.Args) < 2 {
+		printUsage()
+		os.Exit(1)
+	}
+
+	// Create subcommands
+	createCmd := flag.NewFlagSet("create", flag.ExitOnError)
+	loadCmd := flag.NewFlagSet("load", flag.ExitOnError)
+
+	// Define flags for load command
+	loadFilePath := loadCmd.String("file", "", "Path to the network file to load")
+	loadVerbose := loadCmd.Bool("verbose", false, "Display detailed network information")
+
+	// Find the command position
+	cmdPos := 1
+	for i, arg := range os.Args {
+		if arg == "create" || arg == "load" {
+			cmdPos = i
+			break
+		}
+	}
+
+	// Parse global flags before the command
+	if cmdPos > 1 {
+		globalFlags := flag.NewFlagSet("global", flag.ExitOnError)
+		globalFlags.IntVar(verbosityPtr, "v", 2, "Verbosity level (0=none, 1=error, 2=info, 3=debug, 4=trace)")
+		globalFlags.StringVar(logFilePtr, "log", "", "Log file path (default: stdout)")
+		globalFlags.Parse(os.Args[1:cmdPos])
+	}
+
+	// Setup logging
+	setupLogging(*verbosityPtr, *logFilePtr)
+
+	// Parse command
+	switch os.Args[cmdPos] {
+	case "create":
+		createCmd.Parse(os.Args[cmdPos+1:])
+		runCreateCommand()
+	case "load":
+		loadCmd.Parse(os.Args[cmdPos+1:])
+		runLoadCommand(*loadFilePath, *loadVerbose)
+	default:
+		printUsage()
+		os.Exit(1)
+	}
+}
+
+// setupLogging configures the global logger
+func setupLogging(verbosity int, logFilePath string) {
+	var logLevel LogLevel
+	switch verbosity {
+	case 0:
+		logLevel = LogLevelNone
+	case 1:
+		logLevel = LogLevelError
+	case 2:
+		logLevel = LogLevelInfo
+	case 3:
+		logLevel = LogLevelDebug
+	case 4:
+		logLevel = LogLevelTrace
+	default:
+		logLevel = LogLevelInfo
+	}
+
+	var writer io.Writer = os.Stdout
+
+	if logFilePath != "" {
+		file, err := os.Create(logFilePath)
+		if err != nil {
+			log.Printf("Failed to create log file: %v, using stdout instead", err)
+		} else {
+			writer = file
+			// Note: We're not closing the file as it will be used throughout the program
+		}
+	}
+
+	GlobalLogger = NewLogger(logLevel, writer, true)
+	// Set a longer progress interval for less frequent updates
+	GlobalLogger.SetProgressInterval(2 * time.Second)
+	GlobalLogger.Info("Logging initialized at level %d", verbosity)
+}
+
+// printUsage prints the usage information for the CLI
+func printUsage() {
+	fmt.Println("Neural Network CLI Tool")
+	fmt.Println("\nUsage:")
+	fmt.Println("  neuralnet [global options] [command] [command options]")
+	fmt.Println("\nGlobal Options:")
+	fmt.Println("  -v level     Verbosity level (0=none, 1=error, 2=info, 3=debug, 4=trace)")
+	fmt.Println("  -log file    Log file path (default: stdout)")
+	fmt.Println("\nCommands:")
+	fmt.Println("  create       Create a new neural network interactively")
+	fmt.Println("  load         Load an existing neural network")
+	fmt.Println("\nOptions for 'load':")
+	fmt.Println("  -file        Path to the network file to load (required)")
+	fmt.Println("  -verbose     Display detailed network information")
+	fmt.Println("\nExamples:")
+	fmt.Println("  neuralnet -v 3 create")
+	fmt.Println("  neuralnet -log network.log load -file ./networks/net96.json")
+}
+
+// runCreateCommand handles the interactive creation of a new network
+func runCreateCommand() {
+	fmt.Println("\nNeural Network Creation Tool")
+	fmt.Println("----------------------------")
+
+	// Collect network configuration through interactive prompts
+	var networkName string
+	var err error
+
+	// Get and validate network name
+	for {
+		networkName = promptString("Network name?", "")
+		err = validateNetworkName(networkName)
+		if err == nil {
+			break
+		}
+		fmt.Printf("Error: %v\n", err)
+	}
+
+	// Get and validate layer count
+	var layerCount int
+	for {
+		layerCount = promptInt("Number of layers?", 1)
+		err = validateLayerCount(layerCount)
+		if err == nil {
+			break
+		}
+		fmt.Printf("Error: %v\n", err)
+	}
+
+	// Get and validate vector dimensions
+	var vectorDims int
+	for {
+		vectorDims = promptInt("Vector dimensions for neurons?", 64)
+		err = validateVectorDimensions(vectorDims)
+		if err == nil {
+			break
+		}
+		fmt.Printf("Error: %v\n", err)
+	}
+
+	// Collect neuron counts for each layer
+	neuronCounts := make([]int, layerCount)
+	for i := 0; i < layerCount; i++ {
+		defaultValue := getDefaultNeuronCount(i, neuronCounts)
+
+		promptText := fmt.Sprintf("Number of neurons for layer %d?", i+1)
+		if i > 0 {
+			promptText = fmt.Sprintf("Number of neurons for layer %d? (enter for %d)", i+1, defaultValue)
 		}
 
-		// Extract neuron connections
-		for neuronUUID, neuron := range layer.Neurons {
-			neuronMap := NeuronConnectionMap{
-				NeuronUUID:  neuronUUID,
-				Connections: make(map[string]float64),
+		for {
+			neuronCounts[i] = promptInt(promptText, defaultValue)
+			err = validateNeuronCount(neuronCounts[i], i+1)
+			if err == nil {
+				break
 			}
-
-			// Copy connections
-			for targetUUID, strength := range neuron.Connections {
-				neuronMap.Connections[targetUUID] = strength
-			}
-
-			layerMap.Neurons[neuronUUID] = neuronMap
-		}
-
-		connectionMap.Layers[layerUUID] = layerMap
-	}
-
-	return connectionMap
-}
-
-// SaveConnectionMapToJSON saves a connection map to a JSON file
-func SaveConnectionMapToJSON(connectionMap *ConnectionMap, filePath string) error {
-	// Create directory if it doesn't exist
-	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory %s: %w", dir, err)
-	}
-
-	// Marshal to JSON
-	data, err := json.MarshalIndent(connectionMap, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal connection map to JSON: %w", err)
-	}
-
-	// Create a temporary file in the same directory
-	tempFile := filePath + ".tmp"
-	if err := os.WriteFile(tempFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write JSON to temporary file: %w", err)
-	}
-
-	// Rename temporary file to target file (atomic operation)
-	if err := os.Rename(tempFile, filePath); err != nil {
-		// Try to clean up the temporary file
-		os.Remove(tempFile)
-		return fmt.Errorf("failed to rename temporary file to %s: %w", filePath, err)
-	}
-
-	return nil
-}
-
-// LoadConnectionMapFromJSON loads a connection map from a JSON file
-func LoadConnectionMapFromJSON(filePath string) (*ConnectionMap, error) {
-	// Read the JSON file
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read JSON file: %w", err)
-	}
-
-	// Unmarshal JSON
-	var connectionMap ConnectionMap
-	if err := json.Unmarshal(data, &connectionMap); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal JSON: %w", err)
-	}
-
-	return &connectionMap, nil
-}
-
-// ApplyConnectionMapToNetwork applies a connection map to a network
-func ApplyConnectionMapToNetwork(connectionMap *ConnectionMap, network *Network) error {
-	// Verify network UUID matches
-	if connectionMap.NetworkUUID != network.UUID {
-		return fmt.Errorf("connection map network UUID (%s) does not match network UUID (%s)",
-			connectionMap.NetworkUUID, network.UUID)
-	}
-
-	// Apply connections to each layer and neuron
-	for layerUUID, layerMap := range connectionMap.Layers {
-		layer, layerExists := network.Layers[layerUUID]
-		if !layerExists {
-			return fmt.Errorf("layer with UUID %s not found in network", layerUUID)
-		}
-
-		// Apply neuron connections
-		for neuronUUID, neuronMap := range layerMap.Neurons {
-			neuron, neuronExists := layer.Neurons[neuronUUID]
-			if !neuronExists {
-				return fmt.Errorf("neuron with UUID %s not found in layer %s", neuronUUID, layerUUID)
-			}
-
-			// Clear existing connections and apply from map
-			neuron.mu.Lock()
-			neuron.Connections = make(map[string]float64)
-			for targetUUID, strength := range neuronMap.Connections {
-				neuron.Connections[targetUUID] = strength
-			}
-			neuron.mu.Unlock()
+			fmt.Printf("Error: %v\n", err)
 		}
 	}
 
-	return nil
-}
+	// Get random seed
+	seed := promptInt64("Random seed (optional, press Enter for time-based seed)?", time.Now().UnixNano())
 
-// ExtractConnectionMapFromNetwork creates a connection map from a network
-func ExtractConnectionMapFromNetwork(network *Network) *ConnectionMap {
-	return NewConnectionMap(network)
-}
+	// Get and validate output file path
+	var filePath string
+	defaultPath := "./" + networkName
+	for {
+		filePath = promptString("Output file path?", defaultPath+".json")
+		err = validateFilePath(filePath)
+		if err == nil {
+			break
+		}
+		fmt.Printf("Error: %v\n", err)
+	}
 
-// ==================== CONNECTION MAP VALIDATION ====================
+	// Display network configuration summary and ask for confirmation
+	fmt.Println("\nNetwork Configuration Summary:")
+	fmt.Printf("  Name: %s\n", networkName)
+	fmt.Printf("  Layers: %d\n", layerCount)
+	fmt.Printf("  Vector dimensions: %d\n", vectorDims)
+	fmt.Println("  Neuron counts per layer:")
+	for i := 0; i < layerCount; i++ {
+		fmt.Printf("    Layer %d: %d neurons\n", i+1, neuronCounts[i])
+	}
+	fmt.Printf("  Random seed: %d\n", seed)
+	fmt.Printf("  Output file: %s\n", filePath)
 
-// ValidateConnectionMap provides manual validation for connection maps
-func ValidateConnectionMap() {
-	fmt.Println("Validating connection map implementation...")
+	// Ask for confirmation
+	confirmed := promptYesNo("\nProceed with network creation?", true)
+	if !confirmed {
+		fmt.Println("Network creation cancelled.")
+		return
+	}
 
-	// Create a temporary directory for validation files
-	tempDir := filepath.Join(os.TempDir(), "divn_validation")
-	os.MkdirAll(tempDir, 0755)
-	defer os.RemoveAll(tempDir) // Clean up after validation
-
-	// Create a test network
-	network, err := NewNetwork("Validation Network", 12345)
+	// Create the network
+	fmt.Println("\nCreating network...")
+	network, err := createNetwork(networkName, layerCount, vectorDims, neuronCounts, seed)
 	if err != nil {
 		fmt.Printf("Error creating network: %v\n", err)
-		return
-	}
-
-	// Add layers
-	for i := 0; i < 2; i++ {
-		layer, err := NewLayer(fmt.Sprintf("Layer-%d", i), 3, 3, 4, network.rand)
-		if err != nil {
-			fmt.Printf("Error creating layer: %v\n", err)
-			return
-		}
-		err = network.AddLayer(layer)
-		if err != nil {
-			fmt.Printf("Error adding layer: %v\n", err)
-			return
-		}
-	}
-
-	// Connect layers
-	err = network.ConnectAllLayers()
-	if err != nil {
-		fmt.Printf("Error connecting layers: %v\n", err)
-		return
-	}
-
-	// Create connection map
-	connectionMap := ExtractConnectionMapFromNetwork(network)
-	if connectionMap == nil {
-		fmt.Println("Error: Failed to extract connection map")
-		return
-	}
-
-	// Verify connection map
-	if connectionMap.NetworkUUID != network.UUID {
-		fmt.Printf("Error: Connection map network UUID mismatch: got %s, want %s\n",
-			connectionMap.NetworkUUID, network.UUID)
-		return
-	}
-
-	if len(connectionMap.Layers) != len(network.Layers) {
-		fmt.Printf("Error: Connection map layer count mismatch: got %d, want %d\n",
-			len(connectionMap.Layers), len(network.Layers))
-		return
-	}
-
-	// Save connection map to temporary file
-	tempFile := filepath.Join(tempDir, "validation_connection_map.json")
-	err = SaveConnectionMapToJSON(connectionMap, tempFile)
-	if err != nil {
-		fmt.Printf("Error saving connection map: %v\n", err)
-		return
-	}
-
-	// Load connection map
-	loadedMap, err := LoadConnectionMapFromJSON(tempFile)
-	if err != nil {
-		fmt.Printf("Error loading connection map: %v\n", err)
-		return
-	}
-
-	// Verify loaded map
-	if loadedMap.NetworkUUID != network.UUID {
-		fmt.Printf("Error: Loaded map network UUID mismatch: got %s, want %s\n",
-			loadedMap.NetworkUUID, network.UUID)
-		return
-	}
-
-	if len(loadedMap.Layers) != len(network.Layers) {
-		fmt.Printf("Error: Loaded map layer count mismatch: got %d, want %d\n",
-			len(loadedMap.Layers), len(network.Layers))
-		return
-	}
-
-	// Count connections in original network
-	totalOriginalConnections := 0
-	for _, layer := range network.Layers {
-		for _, neuron := range layer.Neurons {
-			totalOriginalConnections += len(neuron.Connections)
-		}
-	}
-
-	// Count connections in loaded map
-	totalMapConnections := 0
-	for _, layerMap := range loadedMap.Layers {
-		for _, neuronMap := range layerMap.Neurons {
-			totalMapConnections += len(neuronMap.Connections)
-		}
-	}
-
-	if totalOriginalConnections != totalMapConnections {
-		fmt.Printf("Error: Connection count mismatch: network has %d, map has %d\n",
-			totalOriginalConnections, totalMapConnections)
-		return
-	}
-
-	fmt.Println("Connection map validation completed successfully!")
-	fmt.Printf("Validated %d layers with %d total connections\n",
-		len(network.Layers), totalOriginalConnections)
-}
-
-// ==================== CONNECTION MAP COMMANDS ====================
-
-// saveNetworkWithConnectionMap saves a network and its connection map to separate files
-func saveNetworkWithConnectionMap(flags CommandFlags) {
-	jsonFilePath := flags.FilePath + ".json"
-	connectionMapFilePath := flags.FilePath + ".connections.json"
-
-	fmt.Printf("Loading network from %s...\n", jsonFilePath)
-
-	// Check if file exists
-	if _, err := os.Stat(jsonFilePath); os.IsNotExist(err) {
-		fmt.Printf("Error: Network file %s does not exist\n", jsonFilePath)
 		os.Exit(1)
 	}
 
-	// Load the network
-	jsonSerializer := NewJSONSerializer()
-	network, err := jsonSerializer.LoadNetworkFromJSON(jsonFilePath, flags.Seed)
+	// Save the network to a file
+	fmt.Printf("Saving network to %s...\n", filePath)
+	serializer := NewJSONSerializer()
+	err = serializer.SaveNetworkToJSON(network, filePath)
+	if err != nil {
+		fmt.Printf("Error saving network: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("\nNetwork created and saved successfully to %s\n", filePath)
+
+	// Ensure all output is flushed
+	os.Stdout.Sync()
+
+	// Exit explicitly to avoid any potential hanging
+	os.Exit(0)
+}
+
+// runLoadCommand handles loading a network from a file
+func runLoadCommand(filePath string, verbose bool) {
+	if filePath == "" {
+		fmt.Println("Error: File path is required")
+		fmt.Println("Usage: neuralnet load -file <path>")
+		os.Exit(1)
+	}
+
+	fmt.Printf("Loading network from %s...\n", filePath)
+	serializer := NewJSONSerializer()
+	network, err := serializer.LoadNetworkFromJSON(filePath, time.Now().UnixNano())
 	if err != nil {
 		fmt.Printf("Error loading network: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Ensure directory exists for output
-	outputDir := filepath.Dir(flags.FilePath)
-	if outputDir != "" && outputDir != "." {
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
-			fmt.Printf("Error creating output directory %s: %v\n", outputDir, err)
-			os.Exit(1)
-		}
-	}
-
-	// Save the network
-	fmt.Printf("Saving network to %s...\n", jsonFilePath)
-
-	// Use JSON serialization
-	err = jsonSerializer.SaveNetworkToJSON(network, jsonFilePath)
-	if err != nil {
-		fmt.Printf("Error saving network to JSON: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Extract and save connection map
-	connectionMap := ExtractConnectionMapFromNetwork(network)
-	fmt.Printf("Saving connection map to %s...\n", connectionMapFilePath)
-
-	err = SaveConnectionMapToJSON(connectionMap, connectionMapFilePath)
-	if err != nil {
-		fmt.Printf("Error saving connection map: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Network saved successfully to %s\n", jsonFilePath)
-	fmt.Printf("Connection map saved successfully to %s\n", connectionMapFilePath)
-
-	if flags.Verbose {
-		fmt.Printf("Network summary: %d layers, %d total neurons\n",
-			len(network.Layers), len(network.NeuronCache))
-	}
-}
-
-// loadNetworkWithConnectionMap loads a network and its connection map from separate files
-func loadNetworkWithConnectionMap(flags CommandFlags) {
-	jsonFilePath := flags.FilePath + ".json"
-	connectionMapFilePath := flags.FilePath + ".connections.json"
-
-	fmt.Printf("Loading network from %s...\n", jsonFilePath)
-
-	// Check if files exist
-	if _, err := os.Stat(jsonFilePath); os.IsNotExist(err) {
-		fmt.Printf("Error: Network file %s does not exist\n", jsonFilePath)
-		os.Exit(1)
-	}
-
-	if _, err := os.Stat(connectionMapFilePath); os.IsNotExist(err) {
-		fmt.Printf("Warning: Connection map file %s does not exist, will use connections from network file\n", connectionMapFilePath)
-	}
-
-	// Load the network using JSON serialization
-	jsonSerializer := NewJSONSerializer()
-	network, err := jsonSerializer.LoadNetworkFromJSON(jsonFilePath, flags.Seed)
-	if err != nil {
-		fmt.Printf("Error loading network: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Load and apply connection map if it exists
-	connectionMapExists := true
-	if _, err := os.Stat(connectionMapFilePath); os.IsNotExist(err) {
-		connectionMapExists = false
-	}
-
-	if connectionMapExists {
-		fmt.Printf("Loading connection map from %s...\n", connectionMapFilePath)
-		connectionMap, err := LoadConnectionMapFromJSON(connectionMapFilePath)
-		if err != nil {
-			fmt.Printf("Error loading connection map: %v\n", err)
-			fmt.Println("Will use connections from network file")
-		} else {
-			// Apply connection map to network
-			err = ApplyConnectionMapToNetwork(connectionMap, network)
-			if err != nil {
-				fmt.Printf("Error applying connection map: %v\n", err)
-				fmt.Println("Will use connections from network file")
-			} else {
-				fmt.Println("Connection map applied successfully")
-			}
-		}
-	}
-
-	// Print network information
-	fmt.Printf("\nNetwork Information:\n")
-	fmt.Printf("Name: %s\n", network.Name)
+	fmt.Printf("\nNetwork loaded successfully: %s\n", network.Name)
 	fmt.Printf("UUID: %s\n", network.UUID)
 	fmt.Printf("Layers: %d\n", len(network.Layers))
-	fmt.Printf("Total Neurons: %d\n", len(network.NeuronCache))
+	fmt.Printf("Total neurons: %d\n", len(network.NeuronCache))
 
-	// Print layer information
-	fmt.Printf("\nLayer Details:\n")
-	for uuid, layer := range network.Layers {
-		fmt.Printf("Layer %s: %s\n", uuid, layer.Name)
-		fmt.Printf("  Dimensions: %dx%d\n", layer.Width, layer.Height)
-		fmt.Printf("  Neurons: %d\n", len(layer.Neurons))
+	if verbose {
+		fmt.Println("\nLayer details:")
+		for _, layer := range network.Layers {
+			fmt.Printf("  - %s (UUID: %s)\n", layer.Name, layer.UUID)
+			fmt.Printf("    Dimensions: %d x %d (%d neurons)\n", layer.Width, layer.Height, len(layer.Neurons))
 
-		if flags.Verbose {
 			// Count connections
 			totalConnections := 0
 			for _, neuron := range layer.Neurons {
 				totalConnections += len(neuron.Connections)
 			}
-			fmt.Printf("  Total Connections: %d\n", totalConnections)
-			fmt.Printf("  Avg Connections per Neuron: %.2f\n",
-				float64(totalConnections)/float64(len(layer.Neurons)))
+			fmt.Printf("    Connections: %d (avg: %.1f per neuron)\n",
+				totalConnections, float64(totalConnections)/float64(len(layer.Neurons)))
 		}
 	}
-
-	fmt.Printf("\nNetwork loaded successfully from %s\n", jsonFilePath)
-	if connectionMapExists {
-		fmt.Printf("Connection map loaded from %s\n", connectionMapFilePath)
-	}
-}
-
-// ==================== MAIN IMPLEMENTATION ====================
-
-// CommandFlags structure for command-line flags
-type CommandFlags struct {
-	Seed         int64
-	LayerCount   int
-	NeuronSize   int
-	VectorDims   int
-	FilePath     string
-	CPUProfile   string
-	MemProfile   string
-	ParallelProc bool
-	Verbose      bool
-}
-
-// Command represents a CLI command with its handler and help text
-type Command struct {
-	Name        string
-	Description string
-	Usage       string
-	Examples    []string
-	Handler     func(flags CommandFlags)
-}
-
-// NetworkCreationOutput represents the JSON output for network creation
-type NetworkCreationOutput struct {
-	Parameters struct {
-		Seed       int64  `json:"seed"`
-		Layers     int    `json:"layers"`
-		Size       int    `json:"size"`
-		Dimensions int    `json:"dimensions"`
-		Filename   string `json:"filename"`
-	} `json:"parameters"`
-	Metrics struct {
-		CreationTime     string `json:"creation_time"`
-		TotalLayers      int    `json:"total_layers"`
-		TotalNeurons     int    `json:"total_neurons"`
-		TotalConnections int    `json:"total_connections"`
-		LayersConnected  int    `json:"layers_connected"`
-		FileSize         int64  `json:"file_size_bytes"`
-	} `json:"metrics"`
-	Network interface{} `json:"network"`
-	Status  string      `json:"status"`
-}
-
-// BinarySerializationBenchmark benchmarks the binary serialization and deserialization
-func BinarySerializationBenchmark(network *Network, filePath string, seed int64) {
-	// Benchmark binary serialization
-	fmt.Println("\nRunning binary serialization benchmark...")
-
-	// Create binary serializer
-	serializer := NewBinarySerializer()
-
-	// Benchmark binary save
-	binarySaveStart := time.Now()
-	binaryFilePath := filePath + ".bin"
-
-	err := serializer.SaveNetworkToBinary(network, binaryFilePath)
-	if err != nil {
-		fmt.Printf("Error saving network to binary: %v\n", err)
-		return
-	}
-
-	binarySaveTime := time.Since(binarySaveStart)
-
-	// Get binary file size
-	binaryFileInfo, err := os.Stat(binaryFilePath)
-	if err != nil {
-		fmt.Printf("Error getting binary file info: %v\n", err)
-		return
-	}
-	binaryFileSize := binaryFileInfo.Size()
-
-	// Benchmark binary load
-	binaryLoadStart := time.Now()
-
-	_, err = serializer.LoadNetworkFromBinary(binaryFilePath, seed)
-	if err != nil {
-		fmt.Printf("Error loading network from binary: %v\n", err)
-		return
-	}
-
-	binaryLoadTime := time.Since(binaryLoadStart)
-
-	// Print results
-	fmt.Println("\nSerialization Benchmark Results:")
-	fmt.Printf("Binary save time: %v\n", binarySaveTime)
-	fmt.Printf("Binary load time: %v\n", binaryLoadTime)
-	fmt.Printf("Binary file size: %v bytes\n", binaryFileSize)
-}
-
-// getCommands returns the map of available commands
-func getCommands() map[string]Command {
-	commands := map[string]Command{
-		"create": {
-			Name:        "create",
-			Description: "Create a new neural network",
-			Usage:       "divn create [options]",
-			Examples: []string{
-				"divn create -layers 4 -size 10 -dims 128 -file mynetwork",
-				"divn create -seed 12345 -parallel",
-			},
-			Handler: createNetwork,
-		},
-		"save": {
-			Name:        "save",
-			Description: "Save an existing network to a file",
-			Usage:       "divn save [options]",
-			Examples: []string{
-				"divn save -file mynetwork",
-			},
-			Handler: saveNetwork,
-		},
-		"load": {
-			Name:        "load",
-			Description: "Load a network from file and display information",
-			Usage:       "divn load [options]",
-			Examples: []string{
-				"divn load -file mynetwork",
-			},
-			Handler: loadNetwork,
-		},
-		"process": {
-			Name:        "process",
-			Description: "Process data through the network",
-			Usage:       "divn process [options]",
-			Examples: []string{
-				"divn process -file mynetwork -dims 64",
-			},
-			Handler: processData,
-		},
-		"benchmark": {
-			Name:        "benchmark",
-			Description: "Run performance benchmarks",
-			Usage:       "divn benchmark [options]",
-			Examples: []string{
-				"divn benchmark -layers 3 -size 10 -dims 128",
-				"divn benchmark -cpuprofile cpu.prof -memprofile mem.prof",
-			},
-			Handler: runBenchmark,
-		},
-		"help": {
-			Name:        "help",
-			Description: "Display help information for a command",
-			Usage:       "divn help [command]",
-			Examples: []string{
-				"divn help",
-				"divn help create",
-			},
-			Handler: func(flags CommandFlags) {
-				// This is handled separately in main()
-			},
-		},
-		"savemap": {
-			Name:        "savemap",
-			Description: "Save a network with its connection map to separate files",
-			Usage:       "divn savemap [options]",
-			Examples: []string{
-				"divn savemap -file mynetwork",
-			},
-			Handler: saveNetworkWithConnectionMap,
-		},
-		"loadmap": {
-			Name:        "loadmap",
-			Description: "Load a network and its connection map from separate files",
-			Usage:       "divn loadmap [options]",
-			Examples: []string{
-				"divn loadmap -file mynetwork",
-			},
-			Handler: loadNetworkWithConnectionMap,
-		},
-	}
-
-	return commands
-}
-
-func main() {
-	// Get available commands
-	commands := getCommands()
-
-	// Check if we have enough arguments
-	if len(os.Args) < 2 {
-		printUsage(commands)
-		os.Exit(1)
-	}
-
-	// Get the command
-	command := os.Args[1]
-
-	// Handle help command specially
-	if command == "help" {
-		if len(os.Args) > 2 {
-			cmdName := os.Args[2]
-			if cmd, exists := commands[cmdName]; exists {
-				printCommandHelp(cmd)
-			} else {
-				fmt.Printf("Unknown command: %s\n", cmdName)
-				printUsage(commands)
-			}
-		} else {
-			printUsage(commands)
-		}
-		os.Exit(0)
-	}
-
-	// Check if command exists
-	cmd, exists := commands[command]
-	if !exists {
-		fmt.Printf("Unknown command: %s\n", command)
-		printUsage(commands)
-		os.Exit(1)
-	}
-
-	// Remove the command from arguments to simplify flag parsing
-	os.Args = append(os.Args[:1], os.Args[2:]...)
-
-	// Create flags structure with default values
-	flags := CommandFlags{
-		Seed:         time.Now().UnixNano(),
-		LayerCount:   3,
-		NeuronSize:   8,
-		VectorDims:   64, // Increased for text encoding
-		FilePath:     "network",
-		CPUProfile:   "",
-		MemProfile:   "",
-		ParallelProc: false,
-		Verbose:      false,
-	}
-
-	// Set up command line flags
-	flag.Int64Var(&flags.Seed, "seed", flags.Seed, "Random seed for reproducible network generation")
-	flag.IntVar(&flags.LayerCount, "layers", flags.LayerCount, "Number of layers in the network")
-	flag.IntVar(&flags.NeuronSize, "size", flags.NeuronSize, "Size of neuron grid (size x size)")
-	flag.IntVar(&flags.VectorDims, "dims", flags.VectorDims, "Dimensions of neuron vectors")
-	flag.StringVar(&flags.FilePath, "file", flags.FilePath, "Base file path for save/load operations (without extension)")
-	flag.StringVar(&flags.CPUProfile, "cpuprofile", flags.CPUProfile, "Write CPU profile to file")
-	flag.StringVar(&flags.MemProfile, "memprofile", flags.MemProfile, "Write memory profile to file")
-	flag.BoolVar(&flags.ParallelProc, "parallel", flags.ParallelProc, "Use parallel processing")
-	flag.BoolVar(&flags.Verbose, "verbose", flags.Verbose, "Enable verbose output")
-
-	// Parse command line flags
-	flag.Parse()
-
-	// Start CPU profiling if requested
-	if flags.CPUProfile != "" {
-		f, err := os.Create(flags.CPUProfile)
-		if err != nil {
-			fmt.Printf("Error creating CPU profile: %v\n", err)
-			os.Exit(1)
-		}
-		defer f.Close()
-
-		if err := pprof.StartCPUProfile(f); err != nil {
-			fmt.Printf("Error starting CPU profile: %v\n", err)
-			os.Exit(1)
-		}
-		defer pprof.StopCPUProfile()
-	}
-
-	// Execute the command
-	cmd.Handler(flags)
-
-	// Write memory profile if requested
-	if flags.MemProfile != "" {
-		f, err := os.Create(flags.MemProfile)
-		if err != nil {
-			fmt.Printf("Error creating memory profile: %v\n", err)
-			os.Exit(1)
-		}
-		defer f.Close()
-
-		runtime.GC() // Get up-to-date statistics
-		if err := pprof.WriteHeapProfile(f); err != nil {
-			fmt.Printf("Error writing memory profile: %v\n", err)
-			os.Exit(1)
-		}
-	}
-}
-
-// printUsage prints the usage information for all commands
-func printUsage(commands map[string]Command) {
-	fmt.Println("divn - Dynamic Routing Neural Network")
-	fmt.Println("\nUsage: divn <command> [options]")
-	fmt.Println("\nCommands:")
-
-	// Get command names and sort them
-	var cmdNames []string
-	for name := range commands {
-		cmdNames = append(cmdNames, name)
-	}
-
-	// Print each command with its description
-	for _, name := range cmdNames {
-		cmd := commands[name]
-		fmt.Printf("  %-12s %s\n", name, cmd.Description)
-	}
-
-	fmt.Println("\nFor command-specific help, use: divn help <command>")
-	fmt.Println("\nGlobal Options:")
-	flag.PrintDefaults()
-}
-
-// printCommandHelp prints detailed help for a specific command
-func printCommandHelp(cmd Command) {
-	fmt.Printf("%s - %s\n\n", cmd.Name, cmd.Description)
-	fmt.Printf("Usage: %s\n\n", cmd.Usage)
-
-	if len(cmd.Examples) > 0 {
-		fmt.Println("Examples:")
-		for _, example := range cmd.Examples {
-			fmt.Printf("  %s\n", example)
-		}
-		fmt.Println()
-	}
-
-	fmt.Println("Options:")
-	flag.PrintDefaults()
 }
 
 // createNetwork creates a new network with the specified parameters
-func createNetwork(flags CommandFlags) {
-	// Create result structure for JSON output
-	output := NetworkCreationOutput{}
-	output.Parameters.Seed = flags.Seed
-	output.Parameters.Layers = flags.LayerCount
-	output.Parameters.Size = flags.NeuronSize
-	output.Parameters.Dimensions = flags.VectorDims
-	output.Parameters.Filename = flags.FilePath + ".json"
-
-	// Record start time for metrics
-	startTime := time.Now()
+func createNetwork(name string, layerCount, vectorDims int, neuronCounts []int, seed int64) (*Network, error) {
+	// Create a progress tracker
+	tracker := NewProgressTracker(layerCount)
 
 	// Create a new network
-	network, err := NewNetwork("Dynamic Routing Network", flags.Seed)
+	network, err := NewNetwork(name, seed)
 	if err != nil {
-		output.Status = fmt.Sprintf("error: %v", err)
-		outputJSON(output)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to create network: %w", err)
 	}
 
 	// Create layers
-	for i := 0; i < flags.LayerCount; i++ {
-		layerName := fmt.Sprintf("Layer-%d", i+1)
-		layer, err := NewLayer(layerName, flags.NeuronSize, flags.NeuronSize, flags.VectorDims, network.rand)
+	for i := 0; i < layerCount; i++ {
+		layerName := fmt.Sprintf("Layer%d", i+1)
+
+		// Calculate dimensions for the layer
+		width, height := calculateLayerDimensions(neuronCounts[i])
+
+		fmt.Printf("Creating layer %d/%d (%s): %d neurons (%dx%d)...\n",
+			i+1, layerCount, layerName, neuronCounts[i], width, height)
+
+		startTime := time.Now()
+
+		// Create the layer
+		layer, err := NewLayerWithUniqueVectors(layerName, width, height, vectorDims, seed+int64(i*1000))
 		if err != nil {
-			output.Status = fmt.Sprintf("error: failed to create layer %s: %v", layerName, err)
-			outputJSON(output)
-			os.Exit(1)
+			return nil, fmt.Errorf("failed to create layer %s: %w", layerName, err)
 		}
 
-		// Add layer to network
+		// Add the layer to the network
 		err = network.AddLayer(layer)
 		if err != nil {
-			output.Status = fmt.Sprintf("error: failed to add layer %s to network: %v", layerName, err)
-			outputJSON(output)
-			os.Exit(1)
+			return nil, fmt.Errorf("failed to add layer %s to network: %w", layerName, err)
 		}
+
+		duration := time.Since(startTime)
+		tracker.RecordLayerCreation(duration)
+
+		fmt.Printf("  Layer created in %s\n", FormatDuration(duration))
+		fmt.Printf("  Estimated time remaining: %s\n", FormatDuration(tracker.GetEstimatedTimeRemaining()))
 	}
 
-	// Connect layers - always use full connections
-	err = network.ConnectAllLayers()
-	if err != nil {
-		output.Status = fmt.Sprintf("error: failed to connect layers: %v", err)
-		outputJSON(output)
-		os.Exit(1)
-	}
-
-	// Ensure directory exists
-	outputDir := filepath.Dir(flags.FilePath)
-	if outputDir != "" && outputDir != "." {
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
-			output.Status = fmt.Sprintf("error: failed to create output directory %s: %v", outputDir, err)
-			outputJSON(output)
-			os.Exit(1)
-		}
-	}
-
-	// Save the network to JSON
-	jsonFilePath := flags.FilePath + ".json"
-	jsonSerializer := NewJSONSerializer()
-	err = jsonSerializer.SaveNetworkToJSON(network, jsonFilePath)
-	if err != nil {
-		output.Status = fmt.Sprintf("error: failed to save network to JSON: %v", err)
-		outputJSON(output)
-		os.Exit(1)
-	}
-
-	// Calculate total connections
-	totalConnections := 0
-	for _, layer := range network.Layers {
-		for _, neuron := range layer.Neurons {
-			totalConnections += len(neuron.Connections)
-		}
-	}
-
-	// Calculate layers connected (number of layer pairs with connections)
-	layersConnected := 0
-	layerCount := len(network.Layers)
-	if layerCount > 1 {
-		// In a fully connected network, each layer is connected to all other layers
-		layersConnected = layerCount * (layerCount - 1)
-	}
-
-	// Get file size
-	fileInfo, err := os.Stat(jsonFilePath)
-	var fileSize int64
-	if err == nil {
-		fileSize = fileInfo.Size()
-	}
-
-	// Record metrics
-	output.Metrics.CreationTime = time.Since(startTime).String()
-	output.Metrics.TotalLayers = len(network.Layers)
-	output.Metrics.TotalNeurons = len(network.NeuronCache)
-	output.Metrics.TotalConnections = totalConnections
-	output.Metrics.LayersConnected = layersConnected
-	output.Metrics.FileSize = fileSize
-
-	// Get the full network structure as JSON
-	networkJSON := jsonSerializer.networkToJSON(network)
-	output.Network = networkJSON
-	output.Status = "success"
-
-	// Output JSON result
-	outputJSON(output)
-}
-
-// outputJSON outputs the result as JSON
-func outputJSON(result interface{}) {
-	jsonData, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		fmt.Printf("Error creating JSON output: %v\n", err)
-		return
-	}
-	fmt.Println(string(jsonData))
-}
-
-// saveNetwork saves an existing network to a file
-func saveNetwork(flags CommandFlags) {
-	jsonFilePath := flags.FilePath + ".json"
-	fmt.Printf("Loading network from %s...\n", jsonFilePath)
-
-	// Check if file exists
-	if _, err := os.Stat(jsonFilePath); os.IsNotExist(err) {
-		fmt.Printf("Error: Network file %s does not exist\n", jsonFilePath)
-		os.Exit(1)
-	}
-
-	// Load the network
-	jsonSerializer := NewJSONSerializer()
-	network, err := jsonSerializer.LoadNetworkFromJSON(jsonFilePath, flags.Seed)
-	if err != nil {
-		fmt.Printf("Error loading network: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Ensure directory exists for output
-	outputDir := filepath.Dir(flags.FilePath)
-	if outputDir != "" && outputDir != "." {
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
-			fmt.Printf("Error creating output directory %s: %v\n", outputDir, err)
-			os.Exit(1)
-		}
-	}
-
-	// Save the network
-	fmt.Printf("Saving network to %s...\n", jsonFilePath)
-
-	// Use JSON serialization
-	err = jsonSerializer.SaveNetworkToJSON(network, jsonFilePath)
-	if err != nil {
-		fmt.Printf("Error saving network to JSON: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Network saved successfully to %s\n", jsonFilePath)
-
-	if flags.Verbose {
-		fmt.Printf("Network summary: %d layers, %d total neurons\n",
-			len(network.Layers), len(network.NeuronCache))
-	}
-}
-
-// loadNetwork loads a network from a file and displays information
-func loadNetwork(flags CommandFlags) {
-	jsonFilePath := flags.FilePath + ".json"
-	fmt.Printf("Loading network from %s...\n", jsonFilePath)
-
-	// Check if file exists
-	if _, err := os.Stat(jsonFilePath); os.IsNotExist(err) {
-		fmt.Printf("Error: Network file %s does not exist\n", jsonFilePath)
-		os.Exit(1)
-	}
-
-	// Load the network using JSON serialization
-	jsonSerializer := NewJSONSerializer()
-	network, err := jsonSerializer.LoadNetworkFromJSON(jsonFilePath, flags.Seed)
-	if err != nil {
-		fmt.Printf("Error loading network: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Print network information
-	fmt.Printf("\nNetwork Information:\n")
-	fmt.Printf("Name: %s\n", network.Name)
-	fmt.Printf("UUID: %s\n", network.UUID)
-	fmt.Printf("Layers: %d\n", len(network.Layers))
-	fmt.Printf("Total Neurons: %d\n", len(network.NeuronCache))
-
-	// Print layer information
-	fmt.Printf("\nLayer Details:\n")
-	for uuid, layer := range network.Layers {
-		fmt.Printf("Layer %s: %s\n", uuid, layer.Name)
-		fmt.Printf("  Dimensions: %dx%d\n", layer.Width, layer.Height)
-		fmt.Printf("  Neurons: %d\n", len(layer.Neurons))
-
-		if flags.Verbose {
-			// Count connections
-			totalConnections := 0
-			for _, neuron := range layer.Neurons {
-				totalConnections += len(neuron.Connections)
-			}
-			fmt.Printf("  Total Connections: %d\n", totalConnections)
-			fmt.Printf("  Avg Connections per Neuron: %.2f\n",
-				float64(totalConnections)/float64(len(layer.Neurons)))
-		}
-	}
-
-	fmt.Printf("\nNetwork loaded successfully from %s\n", jsonFilePath)
-}
-
-// processData processes data through the network
-func processData(flags CommandFlags) {
-	jsonFilePath := flags.FilePath + ".json"
-	fmt.Printf("Loading network from %s...\n", jsonFilePath)
-
-	// Check if file exists
-	if _, err := os.Stat(jsonFilePath); os.IsNotExist(err) {
-		fmt.Printf("Error: Network file %s does not exist\n", jsonFilePath)
-		os.Exit(1)
-	}
-
-	// Load the network
-	jsonSerializer := NewJSONSerializer()
-	network, err := jsonSerializer.LoadNetworkFromJSON(jsonFilePath, flags.Seed)
-	if err != nil {
-		fmt.Printf("Error loading network: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Get the first layer and neuron for processing
-	var startLayerUUID, startNeuronUUID string
-	for layerUUID, layer := range network.Layers {
-		startLayerUUID = layerUUID
-		for neuronUUID := range layer.Neurons {
-			startNeuronUUID = neuronUUID
-			break
-		}
-		break
-	}
-
-	if startLayerUUID == "" || startNeuronUUID == "" {
-		fmt.Println("Error: Could not find a starting layer and neuron")
-		os.Exit(1)
-	}
-
-	// Create test data
-	testData := make([]float64, flags.VectorDims)
-	for i := range testData {
-		testData[i] = float64(i) / float64(flags.VectorDims)
-	}
-
-	// Process data
-	fmt.Println("Processing data...")
-	maxSteps := 10 // Default max steps
-
-	if flags.Verbose {
-		fmt.Printf("Starting from layer UUID: %s, neuron UUID: %s\n",
-			startLayerUUID, startNeuronUUID)
-		fmt.Printf("Input vector dimensions: %d\n", len(testData))
-		fmt.Printf("Maximum processing steps: %d\n", maxSteps)
-	}
-
-	result, path, err := network.ProcessData(startLayerUUID, startNeuronUUID, testData, maxSteps)
-	if err != nil {
-		fmt.Printf("Error processing data: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Print results
-	fmt.Println("\nProcessing Results:")
-	fmt.Printf("Path length: %d\n", len(path))
-	fmt.Printf("Result dimensions: %d\n", len(result))
-
-	// Print the path if verbose
-	if flags.Verbose && len(path) > 0 {
-		fmt.Println("\nProcessing Path:")
-		for i, neuronUUID := range path {
-			fmt.Printf("  Step %d: %s\n", i+1, neuronUUID)
-		}
-	}
-
-	// Print the result preview
-	fmt.Println("\nResult Preview:")
-	previewCount := 5
-	if len(result) < previewCount {
-		previewCount = len(result)
-	}
-	for i := 0; i < previewCount; i++ {
-		fmt.Printf("  Dimension %d: %f\n", i, result[i])
-	}
-
-	if len(result) > previewCount {
-		fmt.Printf("  ... %d more dimensions\n", len(result)-previewCount)
-	}
-
-	fmt.Println("\nProcessing complete.")
-}
-
-// runBenchmark runs performance benchmarks
-func runBenchmark(flags CommandFlags) {
-	fmt.Println("Running benchmarks...")
-
-	if flags.Verbose {
-		fmt.Printf("Benchmark configuration: %d layers, %dx%d neurons, %d vector dimensions\n",
-			flags.LayerCount, flags.NeuronSize, flags.NeuronSize, flags.VectorDims)
-	}
-
-	// Create a network for benchmarking
-	network, err := NewNetwork("Benchmark Network", flags.Seed)
-	if err != nil {
-		fmt.Printf("Error creating network: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Create layers
+	// Connect all layers
+	fmt.Println("\nConnecting layers...")
 	startTime := time.Now()
-	for i := 0; i < flags.LayerCount; i++ {
-		layerName := fmt.Sprintf("Layer-%d", i+1)
-		layer, err := NewLayer(layerName, flags.NeuronSize, flags.NeuronSize, flags.VectorDims, network.rand)
-		if err != nil {
-			fmt.Printf("Error creating layer %s: %v\n", layerName, err)
-			os.Exit(1)
-		}
-
-		// Add layer to network
-		err = network.AddLayer(layer)
-		if err != nil {
-			fmt.Printf("Error adding layer %s to network: %v\n", layerName, err)
-			os.Exit(1)
-		}
-	}
-	layerCreationTime := time.Since(startTime)
-
-	if flags.Verbose {
-		fmt.Printf("Layer creation time: %v\n", layerCreationTime)
-	}
-
-	// Connect layers - always use full connections
-	fmt.Println("Connecting all layers...")
-	connectionStartTime := time.Now()
 	err = network.ConnectAllLayers()
 	if err != nil {
-		fmt.Printf("Error connecting layers: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to connect layers: %w", err)
 	}
-	connectionTime := time.Since(connectionStartTime)
+	duration := time.Since(startTime)
 
-	if flags.Verbose {
-		fmt.Printf("Layer connection time: %v\n", connectionTime)
+	fmt.Printf("All layers connected in %s\n", FormatDuration(duration))
+	fmt.Printf("Total creation time: %s\n", FormatDuration(tracker.GetTotalTime()))
+
+	return network, nil
+}
+
+// calculateLayerDimensions calculates the width and height for a layer based on neuron count
+func calculateLayerDimensions(neuronCount int) (width, height int) {
+	// Try to make the layer as square as possible
+	width = int(math.Sqrt(float64(neuronCount)))
+	height = (neuronCount + width - 1) / width // Ceiling division
+	return
+}
+
+// getDefaultNeuronCount returns a default neuron count for a layer
+func getDefaultNeuronCount(layerIndex int, existingCounts []int) int {
+	if layerIndex == 0 {
+		return 64 // Default for first layer
+	}
+	return existingCounts[layerIndex-1] // Use previous layer's count as default
+}
+
+// validateNetworkName validates the network name
+func validateNetworkName(name string) error {
+	if name == "" {
+		return fmt.Errorf("network name cannot be empty")
+	}
+	return nil
+}
+
+// validateLayerCount validates the layer count
+func validateLayerCount(count int) error {
+	if count <= 0 {
+		return fmt.Errorf("layer count must be positive")
+	}
+	if count > 100 {
+		return fmt.Errorf("layer count cannot exceed 100")
+	}
+	return nil
+}
+
+// validateVectorDimensions validates the vector dimensions
+func validateVectorDimensions(dims int) error {
+	if dims <= 0 {
+		return fmt.Errorf("vector dimensions must be positive")
+	}
+	if dims > 1024 {
+		return fmt.Errorf("vector dimensions cannot exceed 1024")
+	}
+	return nil
+}
+
+// validateNeuronCount validates the neuron count for a layer
+func validateNeuronCount(count, layerIndex int) error {
+	if count <= 0 {
+		return fmt.Errorf("neuron count must be positive")
+	}
+	if count > 10000 {
+		return fmt.Errorf("neuron count cannot exceed 10000")
+	}
+	return nil
+}
+
+// validateFilePath validates the output file path
+func validateFilePath(path string) error {
+	if path == "" {
+		return fmt.Errorf("file path cannot be empty")
 	}
 
-	// Create benchmark directory
-	benchmarkDir := filepath.Join(filepath.Dir(flags.FilePath), "benchmark")
-	err = os.MkdirAll(benchmarkDir, 0755)
-	if err != nil {
-		fmt.Printf("Error creating benchmark directory: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Run serialization benchmark
-	benchmarkFilePath := filepath.Join(benchmarkDir, "network")
-
-	// JSON serialization benchmark
-	fmt.Println("\nRunning JSON serialization benchmark...")
-	jsonSerializer := NewJSONSerializer()
-
-	// Benchmark JSON save
-	jsonSaveStart := time.Now()
-	jsonFilePath := benchmarkFilePath + ".json"
-
-	err = jsonSerializer.SaveNetworkToJSON(network, jsonFilePath)
-	if err != nil {
-		fmt.Printf("Error saving network to JSON: %v\n", err)
-	} else {
-		jsonSaveTime := time.Since(jsonSaveStart)
-
-		// Get JSON file size
-		jsonFileInfo, err := os.Stat(jsonFilePath)
-		if err != nil {
-			fmt.Printf("Error getting JSON file info: %v\n", err)
-		} else {
-			jsonFileSize := jsonFileInfo.Size()
-
-			// Benchmark JSON load
-			jsonLoadStart := time.Now()
-			_, err = jsonSerializer.LoadNetworkFromJSON(jsonFilePath, flags.Seed)
-			if err != nil {
-				fmt.Printf("Error loading network from JSON: %v\n", err)
-			} else {
-				jsonLoadTime := time.Since(jsonLoadStart)
-
-				// Print results
-				fmt.Printf("JSON save time: %v\n", jsonSaveTime)
-				fmt.Printf("JSON load time: %v\n", jsonLoadTime)
-				fmt.Printf("JSON file size: %v bytes\n", jsonFileSize)
+	// Check if the directory exists
+	dir := filepath.Dir(path)
+	if dir != "." {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			// Try to create the directory
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				return fmt.Errorf("directory does not exist and could not be created: %s", dir)
 			}
 		}
 	}
 
-	// Run binary serialization benchmark
-	BinarySerializationBenchmark(network, benchmarkFilePath, flags.Seed)
-
-	// Run connection map benchmark
-	fmt.Println("\nRunning connection map benchmark...")
-
-	// Extract connection map
-	connectionMapStart := time.Now()
-	connectionMap := ExtractConnectionMapFromNetwork(network)
-	connectionMapTime := time.Since(connectionMapStart)
-
-	// Save connection map
-	connectionMapFilePath := benchmarkFilePath + ".connections.json"
-	connectionMapSaveStart := time.Now()
-	err = SaveConnectionMapToJSON(connectionMap, connectionMapFilePath)
-	if err != nil {
-		fmt.Printf("Error saving connection map: %v\n", err)
-	} else {
-		connectionMapSaveTime := time.Since(connectionMapSaveStart)
-
-		// Get connection map file size
-		connectionMapFileInfo, err := os.Stat(connectionMapFilePath)
-		if err != nil {
-			fmt.Printf("Error getting connection map file info: %v\n", err)
-		} else {
-			connectionMapFileSize := connectionMapFileInfo.Size()
-
-			// Load connection map
-			connectionMapLoadStart := time.Now()
-			_, err = LoadConnectionMapFromJSON(connectionMapFilePath)
-			if err != nil {
-				fmt.Printf("Error loading connection map: %v\n", err)
-			} else {
-				connectionMapLoadTime := time.Since(connectionMapLoadStart)
-
-				// Print results
-				fmt.Printf("Connection map extraction time: %v\n", connectionMapTime)
-				fmt.Printf("Connection map save time: %v\n", connectionMapSaveTime)
-				fmt.Printf("Connection map load time: %v\n", connectionMapLoadTime)
-				fmt.Printf("Connection map file size: %v bytes\n", connectionMapFileSize)
-			}
-		}
+	// Check if the file has a .json extension
+	if !strings.HasSuffix(path, ".json") {
+		return fmt.Errorf("file must have a .json extension")
 	}
 
-	fmt.Println("\nBenchmark complete.")
+	return nil
+}
+
+// promptString prompts the user for a string input
+func promptString(prompt, defaultValue string) string {
+	reader := bufio.NewReader(os.Stdin)
+
+	if defaultValue != "" {
+		fmt.Printf("%s [%s]: ", prompt, defaultValue)
+	} else {
+		fmt.Printf("%s: ", prompt)
+	}
+
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Printf("Error reading input: %v\n", err)
+		return defaultValue
+	}
+
+	// Trim whitespace and newline
+	input = strings.TrimSpace(input)
+
+	if input == "" {
+		return defaultValue
+	}
+
+	return input
+}
+
+// promptInt prompts the user for an integer input
+func promptInt(prompt string, defaultValue int) int {
+	reader := bufio.NewReader(os.Stdin)
+
+	if defaultValue != 0 {
+		fmt.Printf("%s [%d]: ", prompt, defaultValue)
+	} else {
+		fmt.Printf("%s: ", prompt)
+	}
+
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Printf("Error reading input: %v\n", err)
+		return defaultValue
+	}
+
+	// Trim whitespace and newline
+	input = strings.TrimSpace(input)
+
+	if input == "" {
+		return defaultValue
+	}
+
+	// Parse the input as an integer
+	value, err := strconv.Atoi(input)
+	if err != nil {
+		fmt.Printf("Invalid integer: %v\n", err)
+		return defaultValue
+	}
+
+	return value
+}
+
+// promptInt64 prompts the user for an int64 input
+func promptInt64(prompt string, defaultValue int64) int64 {
+	reader := bufio.NewReader(os.Stdin)
+
+	if defaultValue != 0 {
+		fmt.Printf("%s [%d]: ", prompt, defaultValue)
+	} else {
+		fmt.Printf("%s: ", prompt)
+	}
+
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Printf("Error reading input: %v\n", err)
+		return defaultValue
+	}
+
+	// Trim whitespace and newline
+	input = strings.TrimSpace(input)
+
+	if input == "" {
+		return defaultValue
+	}
+
+	// Parse the input as an int64
+	value, err := strconv.ParseInt(input, 10, 64)
+	if err != nil {
+		fmt.Printf("Invalid integer: %v\n", err)
+		return defaultValue
+	}
+
+	return value
+}
+
+// promptYesNo prompts the user for a yes/no answer
+func promptYesNo(prompt string, defaultValue bool) bool {
+	reader := bufio.NewReader(os.Stdin)
+
+	defaultStr := "y"
+	if !defaultValue {
+		defaultStr = "n"
+	}
+
+	fmt.Printf("%s [%s]: ", prompt, defaultStr)
+
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Printf("Error reading input: %v\n", err)
+		return defaultValue
+	}
+
+	// Trim whitespace and newline
+	input = strings.TrimSpace(input)
+
+	if input == "" {
+		return defaultValue
+	}
+
+	// Check for yes/no variations
+	input = strings.ToLower(input)
+	if input == "y" || input == "yes" || input == "true" || input == "1" {
+		return true
+	}
+	if input == "n" || input == "no" || input == "false" || input == "0" {
+		return false
+	}
+
+	// Invalid input, use default
+	fmt.Printf("Invalid input, using default: %v\n", defaultValue)
+	return defaultValue
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// max returns the maximum of two integers
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
