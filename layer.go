@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
@@ -13,12 +12,12 @@ import (
 
 // Layer represents a collection of neurons in a 2D grid
 type Layer struct {
-	UUID    string             `json:"uuid"`
-	Name    string             `json:"name"`
-	Width   int                `json:"width"`   // Width of the neuron grid
-	Height  int                `json:"height"`  // Height of the neuron grid
-	Neurons map[string]*Neuron `json:"neurons"` // Map of neuron UUIDs to neurons
-	mu      sync.RWMutex       `json:"-"`       // Mutex for thread safety
+	UUID    string             // Unique identifier
+	Name    string             // Layer name
+	Width   int                // Width of the neuron grid
+	Height  int                // Height of the neuron grid
+	Neurons map[string]*Neuron // Map of neuron UUIDs to neurons
+	mu      sync.RWMutex       // Mutex for thread safety
 }
 
 // NewLayer creates a new layer with the specified dimensions and vector size
@@ -154,7 +153,7 @@ func (l *Layer) ConnectInternalNeurons(r *rand.Rand) error {
 	return nil
 }
 
-// SaveToFile saves a single layer to a JSON file
+// SaveToFile saves a single layer to a binary file
 func (l *Layer) SaveToFile(filePath string) error {
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(filePath)
@@ -168,15 +167,19 @@ func (l *Layer) SaveToFile(filePath string) error {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	// Marshal layer to JSON
-	data, err := json.MarshalIndent(l, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal layer to JSON: %w", err)
-	}
+	// Create a binary serializer
+	bs := NewBinarySerializer()
 
-	// Write to temporary file
-	if err := os.WriteFile(tempFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write to temporary file %s: %w", tempFile, err)
+	// Open the temporary file for writing
+	file, err := os.Create(tempFile)
+	if err != nil {
+		return fmt.Errorf("failed to create temporary file %s: %w", tempFile, err)
+	}
+	defer file.Close()
+
+	// Write the layer using binary serialization
+	if err := bs.writeLayer(file, l); err != nil {
+		return fmt.Errorf("failed to write layer to binary file: %w", err)
 	}
 
 	// Rename temporary file to target file (atomic operation)
@@ -189,19 +192,23 @@ func (l *Layer) SaveToFile(filePath string) error {
 	return nil
 }
 
-// LoadLayerFromFile loads a layer from a JSON file
+// LoadLayerFromFile loads a layer from a binary file
 func LoadLayerFromFile(filePath string) (*Layer, error) {
-	// Read file
-	data, err := os.ReadFile(filePath)
+	// Create a binary serializer
+	bs := NewBinarySerializer()
+
+	// Open the file for reading
+	file, err := os.Open(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file %s: %w", filePath, err)
+		return nil, fmt.Errorf("failed to open file %s: %w", filePath, err)
+	}
+	defer file.Close()
+
+	// Read the layer using binary serialization
+	layer, err := bs.readLayer(file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read layer from binary file: %w", err)
 	}
 
-	// Unmarshal JSON to layer
-	var layer Layer
-	if err := json.Unmarshal(data, &layer); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal JSON from %s: %w", filePath, err)
-	}
-
-	return &layer, nil
+	return layer, nil
 }

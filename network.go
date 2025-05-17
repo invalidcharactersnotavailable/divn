@@ -1,12 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
-	"os"
-	"path/filepath"
 	"sync"
 
 	"github.com/google/uuid"
@@ -14,12 +11,12 @@ import (
 
 // Network represents the entire dynamic routing network
 type Network struct {
-	UUID        string             `json:"uuid"`
-	Name        string             `json:"name"`
-	Layers      map[string]*Layer  `json:"layers"`
-	NeuronCache map[string]*Neuron `json:"-"` // Global neuron cache for O(1) lookup
-	mu          sync.RWMutex       `json:"-"` // Mutex for thread safety
-	rand        *rand.Rand         `json:"-"` // Random source for deterministic operations
+	UUID        string             // Unique identifier
+	Name        string             // Network name
+	Layers      map[string]*Layer  // Map of layer UUIDs to layers
+	NeuronCache map[string]*Neuron // Global neuron cache for O(1) lookup
+	mu          sync.RWMutex       // Mutex for thread safety
+	rand        *rand.Rand         // Random source for deterministic operations
 }
 
 // NewNetwork creates a new network with the given name and random seed
@@ -275,70 +272,20 @@ func (n *Network) ProcessDataParallel(startLayerUUID, startNeuronUUID string, da
 	return results, paths, errors
 }
 
-// SaveToFile saves the network to a JSON file
+// SaveToFile saves the network to a binary file
 func (n *Network) SaveToFile(filePath string) error {
-	// Create directory if it doesn't exist
-	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory %s: %w", dir, err)
-	}
+	// Create a binary serializer
+	bs := NewBinarySerializer()
 
-	// Create a temporary file in the same directory
-	tempFile := filePath + ".tmp"
-
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-
-	// Marshal network to JSON
-	data, err := json.MarshalIndent(n, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal network to JSON: %w", err)
-	}
-
-	// Write to temporary file
-	if err := os.WriteFile(tempFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write to temporary file %s: %w", tempFile, err)
-	}
-
-	// Rename temporary file to target file (atomic operation)
-	if err := os.Rename(tempFile, filePath); err != nil {
-		// Try to clean up the temporary file
-		os.Remove(tempFile)
-		return fmt.Errorf("failed to rename temporary file to %s: %w", filePath, err)
-	}
-
-	return nil
+	// Use the binary serializer to save the network
+	return bs.SaveNetworkToBinary(n, filePath)
 }
 
-// LoadNetworkFromFile loads a network from a JSON file
+// LoadNetworkFromFile loads a network from a binary file
 func LoadNetworkFromFile(filePath string, seed int64) (*Network, error) {
-	// Read file
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file %s: %w", filePath, err)
-	}
+	// Create a binary serializer
+	bs := NewBinarySerializer()
 
-	// Unmarshal JSON to network
-	var network Network
-	if err := json.Unmarshal(data, &network); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal JSON from %s: %w", filePath, err)
-	}
-
-	// Initialize non-serialized fields with appropriate capacity
-	neuronCount := 0
-	for _, layer := range network.Layers {
-		neuronCount += len(layer.Neurons)
-	}
-
-	network.NeuronCache = make(map[string]*Neuron, neuronCount)
-	network.rand = rand.New(rand.NewSource(seed))
-
-	// Rebuild the neuron cache
-	for _, layer := range network.Layers {
-		for neuronUUID, neuron := range layer.Neurons {
-			network.NeuronCache[neuronUUID] = neuron
-		}
-	}
-
-	return &network, nil
+	// Use the binary serializer to load the network
+	return bs.LoadNetworkFromBinary(filePath, seed)
 }

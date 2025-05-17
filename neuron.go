@@ -10,11 +10,11 @@ import (
 
 // Neuron represents a processing unit in the network with UUID-based identification
 type Neuron struct {
-	UUID        string             `json:"uuid"`        // Unique identifier using UUID
-	Value       *Vector            `json:"value"`       // Vector for data transformation with selectable dimensions
-	Resistance  float64            `json:"resistance"`  // Resistance value for routing (lower = higher priority)
-	Connections map[string]float64 `json:"connections"` // Map of connected neuron UUIDs to connection strengths
-	mu          sync.RWMutex       `json:"-"`           // Mutex for thread safety
+	UUID        string             // Unique identifier using UUID
+	Value       *Vector            // Vector for data transformation with selectable dimensions
+	Resistance  float64            // Resistance value for routing (lower = higher priority)
+	Connections map[string]float64 // Map of connected neuron UUIDs to connection strengths
+	mu          sync.RWMutex       // Mutex for thread safety
 }
 
 // NewNeuron creates a new neuron with the specified vector dimensions using provided random source

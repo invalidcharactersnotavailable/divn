@@ -7,7 +7,7 @@ import (
 
 // Vector represents a flexible-dimension vector for neuron operations
 type Vector struct {
-	Dimensions []float64 `json:"dimensions"` // Values for each dimension
+	Dimensions []float64 // Values for each dimension
 }
 
 // NewVector creates a new vector with the specified number of dimensions

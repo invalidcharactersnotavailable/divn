@@ -1,2 +1,6 @@
 divn
 network.json
+*.bin
+math/
+benchmark/
+qe/
