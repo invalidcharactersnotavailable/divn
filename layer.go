@@ -119,27 +119,18 @@ func (l *Layer) ConnectInternalNeurons(r *rand.Rand) error {
 		neuronUUIDs = append(neuronUUIDs, uuid)
 	}
 
-	// Connect each neuron to a random subset of other neurons
+	// Connect each neuron to ALL other neurons in the layer (fully connected)
 	for _, sourceUUID := range neuronUUIDs {
 		source, exists := l.Neurons[sourceUUID]
 		if !exists {
 			return fmt.Errorf("source neuron not found: %s", sourceUUID)
 		}
 
-		// Determine number of connections (random between 1 and 5)
-		connectionCount := r.Intn(5) + 1
-
-		// Shuffle neuron UUIDs for random selection
-		for i := range neuronUUIDs {
-			j := r.Intn(i + 1)
-			neuronUUIDs[i], neuronUUIDs[j] = neuronUUIDs[j], neuronUUIDs[i]
-		}
-
-		// Connect to the selected subset
-		for i := 0; i < connectionCount && i < len(neuronUUIDs); i++ {
-			targetUUID := neuronUUIDs[i]
+		// Connect to all other neurons (except self)
+		for _, targetUUID := range neuronUUIDs {
+			// Skip self-connections
 			if targetUUID == sourceUUID {
-				continue // Skip self
+				continue
 			}
 
 			// Random initial connection strength

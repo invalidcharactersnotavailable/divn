@@ -34,7 +34,7 @@ func NewNetwork(name string, seed int64) (*Network, error) {
 	}, nil
 }
 
-// AddLayer adds a layer to the network and updates the neuron cache
+// AddLayer adds a layer to the network, updates the neuron cache, and connects internal neurons
 func (n *Network) AddLayer(layer *Layer) error {
 	if layer == nil {
 		return fmt.Errorf("layer cannot be nil")
@@ -56,6 +56,11 @@ func (n *Network) AddLayer(layer *Layer) error {
 			return fmt.Errorf("neuron UUID conflict: %s already exists in network", neuronUUID)
 		}
 		n.NeuronCache[neuronUUID] = neuron
+	}
+
+	// Connect neurons within the layer (intraconnections)
+	if err := layer.ConnectInternalNeurons(n.rand); err != nil {
+		return fmt.Errorf("failed to connect internal neurons in layer %s: %w", layer.Name, err)
 	}
 
 	return nil
